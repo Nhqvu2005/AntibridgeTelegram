@@ -1,66 +1,50 @@
 {
-    "name": "@linhbanbanhbao/antibridge-remote-antigravity",
-    "version": "3.7.1",
-    "description": "🌉 Điều khiển Antigravity AI từ xa qua Web/Mobile - Remote Control Antigravity Agent - Auto-Accept Actions - Context-based CDP Injection - Real-time Chat WebSocket - Mobile PWA",
+    "name": "antibridge-telegram",
+    "version": "1.0.0",
+    "description": "🌉 Antigravity Bridge for Telegram - Remote Control AI Agent via Telegram with CDP Injection, Smart Polling, and Quota Monitor. Fork of AntiBridge-Antigravity-remote by linhbq82.",
     "main": "backend/server.js",
     "scripts": {
         "start": "node backend/server.js",
+        "telegram": "node backend/telegram-server.js",
         "dev": "node --watch backend/server.js",
+        "dev:telegram": "node --watch backend/telegram-server.js",
         "setup": "call SETUP.bat",
         "test": "echo \"Error: no test specified\" && exit 1"
     },
     "keywords": [
         "antigravity",
-        "antigravity-remote",
-        "remote-antigravity",
-        "control-antigravity",
-        "antigravity-mobile",
-        "antigravity-web",
+        "telegram-bot",
         "remote-control",
         "ai-agent",
-        "web-control",
-        "mobile-app",
-        "pwa",
         "cdp",
-        "chrome-devtools-protocol",
         "puppeteer",
-        "websocket",
-        "real-time-chat",
-        "ai-assistant",
-        "automation",
-        "claude",
-        "gpt",
-        "gemini",
-        "nodejs",
-        "express",
-        "mobile-first",
-        "vietnamese",
-        "tieng-viet"
+        "smart-polling",
+        "quota-monitor"
     ],
     "repository": {
         "type": "git",
-        "url": "git+https://github.com/linhbanbanhbao/Antibridge_Remote_Antigravity.git"
+        "url": "git+https://github.com/Nhqvu2005/AntibridgeTelegram.git"
     },
     "author": {
-        "name": "Linh Bui",
-        "email": "linhbanbanhbao@gmail.com",
-        "url": "https://github.com/linhbanbanhbao"
+        "name": "Nhqvu2005",
+        "url": "https://github.com/Nhqvu2005"
     },
     "license": "MIT",
     "bugs": {
-        "url": "https://github.com/linhbanbanhbao/Antibridge_Remote_Antigravity/issues"
+        "url": "https://github.com/Nhqvu2005/AntibridgeTelegram/issues"
     },
-    "homepage": "https://github.com/linhbanbanhbao/Antibridge_Remote_Antigravity#readme",
+    "homepage": "https://github.com/Nhqvu2005/AntibridgeTelegram#readme",
     "engines": {
         "node": ">=18.0.0",
         "npm": ">=9.0.0"
     },
     "dependencies": {
+        "cors": "^2.8.5",
+        "dotenv": "^17.2.4",
         "express": "^4.18.2",
-        "ws": "^8.16.0",
+        "node-telegram-bot-api": "^0.67.0",
         "puppeteer-core": "^24.0.0",
         "uuid": "^9.0.1",
-        "cors": "^2.8.5"
-    },
-    "devDependencies": {}
+        "ws": "^8.16.0"
+    }
 }

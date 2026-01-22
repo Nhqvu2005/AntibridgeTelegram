@@ -1,114 +1,91 @@
-<div align="center">
+# AntiBridge - Antigravity Remote
 
-<img src="media/Logo_AntiBridge.png" width="200" alt="AntiBridge Logo">
+**[Tiếng Việt]**  
+Một cầu nối mạnh mẽ giữa **Antigravity IDE** và **Telegram**, cho phép bạn điều khiển, chat và giám sát AI từ xa.
 
-# 🌉 AntiBridge
-
-**A bridge between your phone and Antigravity.**
-
-[![Version](https://img.shields.io/badge/version-3.7.1-blue.svg)](https://github.com/linhbq82/Antibridge_Remote_Antigravity/releases)
-[![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
-[![Node](https://img.shields.io/badge/node-%3E%3D18.0.0-brightgreen.svg)](https://nodejs.org/en/download/current)
-
-*Control Antigravity AI from your phone, tablet, or any device with a browser*
-
-</div>
+**[English]**  
+A powerful bridge between **Antigravity IDE** and **Telegram**, allowing you to control, chat, and monitor your AI remotely.
 
 ---
 
-## 🎯 What is AntiBridge?
+## 🌟 Tính Năng Nổi Bật / Key Features
 
-**AntiBridge** is a web-based remote control interface for [Antigravity AI](https://antigravity.google). Send prompts, switch AI models, and control your AI agent from anywhere using your phone or any browser.
-
-### 🔗 Related Project
-
-| Project | Description |
-|---------|-------------|
-| 🤖 **[AntiBridge-AutoAccept](https://github.com/linhbq82/Antibridge-autoaccep-for-antigravity)** | Companion extension for auto-accepting AI actions |
-
----
-
-## 🚀 Quick Start
-
-### Requirements
-
-- ✅ **Node.js** v18 or higher ([Download](https://nodejs.org/en/download/current))
-- ✅ **Antigravity** installed ([Download](https://antigravity.google))
-
-### ⚡ 3 Steps to Launch
-
-| Step | Action |
-|------|--------|
-| **1️⃣** | **Double-click** `OPEN_ANTIGRAVITY_CDP.bat` |
-| **2️⃣** | **Right-click** `START_SERVER.bat` → **Run as Administrator** |
-| **3️⃣** | Access `http://YOUR_IP:8000` from your phone |
-
-### 📱 Find Your PC's IP Address
-
-```
-1. Open CMD (Windows + R → type "cmd" → Enter)
-2. Type: ipconfig
-3. Find "IPv4 Address" → That's your IP
-```
-
-**Example:** If IP is `192.168.100.20` → Access `http://192.168.100.20:8000`
-
-### 🔧 First Time Setup
-
-```bash
-git clone https://github.com/linhbq82/Antibridge_Remote_Antigravity.git
-cd Antibridge_Remote_Antigravity
-npm install
-```
+- **✅ Chat 2 chiều / 2-way Chat**: Gửi tin nhắn từ Telegram vào Antigravity và nhận câu trả lời AI.
+- **✅ Smart Polling**: Tự động điều chỉnh thời gian chờ (ngắn/dài) để bắt trọn vẹn câu trả lời mà không lo timeout.
+- **✅ Single Message UI**: Cập nhật câu trả lời AI liên tục trên **một tin nhắn duy nhất**, không spam tin nhắn mới.
+- **✅ CDP Direct Injection**: Gửi lệnh trực tiếp qua Chrome DevTools Protocol (CDP) — **không chiếm chuột, không minimize cửa sổ**.
+- **✅ Quota Monitor**: Xem dung lượng sử dụng các model AI ngay trên Telegram với lệnh `/quota`.
+- **✅ Multi-Model Supports**: Hỗ trợ chuyển đổi model AI dễ dàng.
 
 ---
 
-## 🎬 Demo
+## Credits
 
-### Fix Missing Prompt
-<img src="media/fix_missing_prompt.gif" width="600" alt="Fix Missing Prompt Demo">
+Dự án này được phát triển dựa trên core của [AntiBridge-Antigravity-remote](https://github.com/linhbq82/AntiBridge-Antigravity-remote).
+Xin chân thành cảm ơn tác giả **linhbq82** đã đặt nền móng cho công cụ tuyệt vời này.
 
----
-
-## 💝 Support This Project
-
-If you find **AntiBridge** useful, please consider supporting! 🙏
-
-<div align="center">
-
-### ☕ Buy Me a Coffee
-
-<a href="https://buymeacoffee.com/linhbq82">
-  <img src="media/buy_me_a_coffee.png" width="200" alt="Buy Me a Coffee QR">
-</a>
-
-### 🥟 Donate
-
-<img src="media/tang_banh_bao.jpg" width="200" alt="Donate QR">
-
-</div>
+This project is built upon the core of [AntiBridge-Antigravity-remote](https://github.com/linhbq82/AntiBridge-Antigravity-remote).
+Special thanks to **linhbq82** for laying the foundation for this amazing tool.
 
 ---
 
-## 📧 Contact
+## 📦 Cài Đặt / Installation
 
-- 👤 **Author**: Linh Bui
-- 📧 **Email**: linhbq82@gmail.com
-- 🐙 **GitHub**: [@linhbq82](https://github.com/linhbq82)
-- 📘 **Facebook**: [linhbuiart.io.vn](https://www.facebook.com/linhbuiart.io.vn/)
+### Yêu cầu / Requirements
+- Node.js (v18+)
+- Antigravity IDE (đang chạy với cổng debug mở sẵn)
+
+### Các bước / Steps
+
+1. **Clone repo & Install dependencies**:
+   ```bash
+   git clone https://github.com/htcba/AntibridgeTelegram.git
+   cd AntibridgeTelegram
+   npm install
+   ```
+
+2. **Cấu hình / Configuration**:
+   - Copy file `.env.example` thành `.env`:
+     ```bash
+     cp .env.example .env
+     ```
+   - Điền thông tin vào `.env`:
+     ```ini
+     TELEGRAM_BOT_TOKEN=your_bot_token_here
+     TELEGRAM_CHAT_ID=your_chat_id_here
+     CDP_PORT=9000  # Default Antigravity debug port
+     ```
+
+3. **Khởi chạy / Run**:
+   - Chạy file `START_TELEGRAM.bat` (Windows)
+   - Hoặc chạy lệnh:
+     ```bash
+     npm start
+     ```
 
 ---
 
-## 📝 License
+## 🎮 Sử dụng / Usage
 
-MIT License - see [LICENSE](LICENSE) file.
+Sau khi khởi chạy, bot Telegram của bạn sẽ online. Bạn có thể sử dụng các lệnh sau:
+
+| Lệnh / Command | Mô tả / Description |
+|----------------|---------------------|
+| `/start`       | Khởi động và kiểm tra kết nối |
+| `/status`      | Kiểm tra trạng thái kết nối tới Antigravity |
+| `/quota`       | 📊 Xem dung lượng sử dụng các model AI |
+| `/stop`        | Dừng AI đang trả lời (Stop generation) |
+| `/clear`       | Xóa lịch sử chat (New context) |
+| `/screenshot`  | Chụp ảnh màn hình Antigravity gửi về Tele |
+| `/reconnect`   | Kết nối lại tới CDP nếu bị mất kết nối |
 
 ---
 
-<div align="center">
+## 🛠️ Troubleshoot
 
-**Made with ❤️ for Antigravity users**
+- **Lỗi "CDP Chat context not found"**: Đảm bảo Antigravity đang mở và bạn đã login.
+- **Không nhận được tin nhắn**: Kiểm tra `TELEGRAM_CHAT_ID` có đúng không.
 
-⭐ **Star this repo if you find it useful!** ⭐
+---
 
-</div>
+**Disclaimer**: This is an unofficial tool and is not affiliated with Antigravity. Use at your own risk.

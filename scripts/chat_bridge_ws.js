@@ -248,16 +248,21 @@
             // Prefer a scrollable transcript near the composer
             let current = composer.parentElement;
             while (current && current !== doc.body) {
-                if (current.querySelector('.notify-user-container') && isScrollable(current)) {
+                // Check for .notify-user-container OR chat message patterns
+                const hasChat = current.querySelector('.notify-user-container') ||
+                    current.querySelector('div[class*="group"][class*="pb-2"]') ||
+                    current.querySelector('div[class*="gap-y-3"]') ||
+                    current.querySelector('div[class*="select-text"]');
+                if (hasChat && isScrollable(current)) {
                     return current;
                 }
                 current = current.parentElement;
             }
 
-            // Fallback: nearest ancestor that contains notify-user-container
+            // Fallback: nearest scrollable ancestor above composer
             current = composer.parentElement;
             while (current && current !== doc.body) {
-                if (current.querySelector('.notify-user-container')) {
+                if (isScrollable(current)) {
                     return current;
                 }
                 current = current.parentElement;
@@ -278,7 +283,10 @@
                 }
 
                 const searchRoot = transcriptRoot || doc;
-                const messageSelectors = ['.notify-user-container'];
+                const messageSelectors = [
+                    '.notify-user-container',
+                    'div[class~="prose"][class*="prose-sm"]'
+                ];
 
                 const seenTexts = new Set();
 
@@ -296,7 +304,7 @@
                             if (classLower.includes('sidebar') || classLower.includes('toolbar')) return;
 
                             const text = getCleanText(container);
-                            if (!text || text.length < 30) return;
+                            if (!text || text.length < 15) return;
 
                             // REMOVED: Model keywords filter was blocking legitimate AI comparison messages
                             // Previously blocked messages with >= 3 model names (Claude, Gemini, GPT...)
@@ -329,6 +337,42 @@
                 }
             } catch (e) { /* cross-origin skip */ }
         });
+
+        // ========== FALLBACK: Transcript container tracking ==========
+        // When CSS selectors fail (regular AI responses have no specific class),
+        // find the transcript container and extract the LAST child's text
+        if (results.length === 0) {
+            iframes.forEach((iframe, idx) => {
+                try {
+                    const doc = iframe.contentDocument || iframe.contentWindow?.document;
+                    if (!doc || !doc.body) return;
+
+                    // Find transcript container by Tailwind classes from diagnostic
+                    const transcripts = doc.querySelectorAll('div[class*="gap-y-3"][class*="px-4"]');
+                    for (const transcript of transcripts) {
+                        const children = transcript.children;
+                        if (children.length === 0) continue;
+
+                        // Get the LAST child (newest message turn)
+                        const lastChild = children[children.length - 1];
+                        const text = getCleanText(lastChild);
+                        if (!text || text.length < 10) continue;
+                        if (isBlockedText(text)) continue;
+
+                        const rect = lastChild.getBoundingClientRect();
+                        results.push({
+                            el: lastChild,
+                            text: text,
+                            html: getHtmlContent(lastChild),
+                            rect: rect,
+                            role: 'assistant', // Assume last message in transcript is AI
+                            iframeIdx: idx
+                        });
+                        console.log(`📋 Transcript tracking: found last child (${text.length}ch, ${children.length} turns)`);
+                    }
+                } catch (e) { /* cross-origin skip */ }
+            });
+        }
 
         if (results.length === 0) {
             // console.log(`⚠️ findAssistantMessages: Found ${iframes.length} iframes, 0 messages`);

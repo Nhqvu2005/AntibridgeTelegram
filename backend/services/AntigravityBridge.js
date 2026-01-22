@@ -586,6 +586,84 @@ class AntigravityBridge {
     }
 
     /**
+     * 📖 Get last AI response text via CDP
+     * Strategy: Find the transcript container (gap-y-3) and extract the LAST message's text
+     * Works for ALL message types - doesn't depend on specific CSS classes
+     */
+    async getLastAIResponse() {
+        if (!this.browser && !this.page) return null;
+
+        try {
+            let allPages = [];
+            if (this.browser) {
+                try {
+                    allPages = await this.browser.pages();
+                } catch (e) {
+                    if (this.page) allPages = [this.page];
+                }
+            } else if (this.page) {
+                allPages = [this.page];
+            }
+
+            let bestText = '';
+            let bestLen = 0;
+
+            for (const pg of allPages) {
+                try {
+                    const pgUrl = pg.url();
+                    if (!pgUrl || pgUrl.includes('about:blank') || pgUrl.includes('devtools')) continue;
+
+                    const frames = pg.frames();
+                    for (const frame of frames) {
+                        try {
+                            const frameUrl = frame.url();
+                            if (!frameUrl || frameUrl === 'about:blank') continue;
+
+                            const result = await frame.evaluate(() => {
+                                // Strategy 1: .notify-user-container (specific)
+                                const notifyContainers = document.querySelectorAll('.notify-user-container');
+                                if (notifyContainers.length > 0) {
+                                    const last = notifyContainers[notifyContainers.length - 1];
+                                    const clone = last.cloneNode(true);
+                                    clone.querySelectorAll('script, style, .thinking-content').forEach(n => n.remove());
+                                    const text = (clone.innerText || '').trim();
+                                    if (text.length >= 10) return { text, strategy: 'notify' };
+                                }
+
+                                // Strategy 2: Regular AI responses (prose blocks)
+                                const proseContainers = document.querySelectorAll(
+                                    'div[class~="prose"][class*="prose-sm"]'
+                                );
+                                if (proseContainers.length > 0) {
+                                    const last = proseContainers[proseContainers.length - 1];
+                                    const clone = last.cloneNode(true);
+                                    clone.querySelectorAll('script, style, .thinking-content').forEach(n => n.remove());
+                                    const text = (clone.innerText || '').trim();
+                                    if (text.length >= 10) return { text, strategy: 'prose' };
+                                }
+
+                                return null;
+                            }).catch(() => null);
+
+                            if (result && result.text && result.text.length > bestLen && result.text.length >= 10) {
+                                bestLen = result.text.length;
+                                bestText = result.text;
+                            }
+                        } catch (e) { /* skip */ }
+                    }
+                } catch (e) { /* skip */ }
+            }
+
+            if (bestText) return bestText;
+
+        } catch (e) {
+            console.error('❌ getLastAIResponse error:', e.message);
+        }
+
+        return null;
+    }
+
+    /**
      * 📋 Change Conversation Mode (Planning/Fast) via CDP DOM Click
      * Click vào mode picker và chọn mode mong muốn
      * @param {string} modeName - "Planning" hoặc "Fast"
@@ -1250,11 +1328,18 @@ class AntigravityBridge {
 
             // ========== 1. Inject vào MAIN PAGE ==========
             try {
-                const alreadyInMain = await this.page.evaluate(() => {
-                    return typeof window.chatBridge !== 'undefined';
+                // Check if bridge exists AND has active WebSocket
+                const bridgeStatus = await this.page.evaluate(() => {
+                    if (typeof window.chatBridge === 'undefined') return 'not_injected';
+                    // Use bridge's own status() to check connection
+                    try {
+                        const st = window.chatBridge.status();
+                        if (st && st.isConnected) return 'ok';
+                    } catch (e) { }
+                    return 'ws_dead';
                 });
 
-                if (!alreadyInMain) {
+                if (bridgeStatus === 'not_injected') {
                     await this.page.evaluate((code) => {
                         try {
                             eval(code);
@@ -1265,8 +1350,25 @@ class AntigravityBridge {
                     }, scriptContent);
                     injectedCount++;
                     console.log('✅ Injected chat bridge into MAIN PAGE');
+                } else if (bridgeStatus === 'ws_dead') {
+                    console.log('🔄 Bridge WS is dead, force re-injecting...');
+                    // Clear old bridge and re-inject
+                    await this.page.evaluate((code) => {
+                        try {
+                            // Properly stop old bridge (closes WS, observer)
+                            if (window.chatBridge?.stop) window.chatBridge.stop();
+                            delete window.chatBridge;
+                            // Re-inject fresh
+                            eval(code);
+                            console.log('✅ Chat bridge RE-INJECTED into main page');
+                        } catch (e) {
+                            console.error('❌ Chat bridge re-inject error:', e.message);
+                        }
+                    }, scriptContent);
+                    injectedCount++;
+                    console.log('✅ Force RE-INJECTED chat bridge into MAIN PAGE');
                 } else {
-                    console.log('ℹ️ Chat bridge already in main page');
+                    console.log('ℹ️ Chat bridge already in main page (WS active)');
                 }
             } catch (e) {
                 console.log('⚠️ Main page inject error:', e.message);
@@ -1312,6 +1414,76 @@ class AntigravityBridge {
             }
 
             console.log(`✅ Chat bridge AUTO-INJECTED to ${injectedCount} context(s)!`);
+
+            // ========== 3. Inject vào ALL BROWSER PAGES (webview targets!) ==========
+            if (this.browser) {
+                try {
+                    const allPages = await this.browser.pages();
+                    let webviewCount = 0;
+
+                    for (const pg of allPages) {
+                        try {
+                            // Skip main page (already done above)
+                            if (pg === this.page) continue;
+
+                            const pgUrl = pg.url();
+                            if (!pgUrl || pgUrl.includes('about:blank') || pgUrl.includes('devtools')) continue;
+
+                            // Check if bridge already injected in this page
+                            const bridgeStatus = await pg.evaluate(() => {
+                                if (typeof window.chatBridge === 'undefined') return 'not_injected';
+                                try {
+                                    const st = window.chatBridge.status();
+                                    if (st && st.isConnected) return 'ok';
+                                } catch (e) { }
+                                return 'ws_dead';
+                            }).catch(() => 'error');
+
+                            if (bridgeStatus === 'not_injected' || bridgeStatus === 'ws_dead') {
+                                await pg.evaluate((code) => {
+                                    try {
+                                        if (window.chatBridge?.stop) window.chatBridge.stop();
+                                        delete window.chatBridge;
+                                        eval(code);
+                                    } catch (e) {
+                                        console.error('Bridge inject error:', e.message);
+                                    }
+                                }, scriptContent);
+                                webviewCount++;
+                                console.log(`✅ Bridge injected into WEBVIEW: ${pgUrl.substring(0, 60)}`);
+                            }
+
+                            // Also try frames within this page
+                            const pgFrames = pg.frames();
+                            for (const frame of pgFrames) {
+                                try {
+                                    const fUrl = frame.url();
+                                    if (!fUrl || fUrl === 'about:blank' || fUrl === pgUrl) continue;
+
+                                    const fStatus = await frame.evaluate(() => {
+                                        return typeof window.chatBridge === 'undefined' ? 'no' : 'yes';
+                                    }).catch(() => 'error');
+
+                                    if (fStatus === 'no') {
+                                        await frame.evaluate((code) => {
+                                            try { eval(code); } catch (e) { }
+                                        }, scriptContent);
+                                        webviewCount++;
+                                        console.log(`✅ Bridge injected into WEBVIEW FRAME: ${fUrl.substring(0, 60)}`);
+                                    }
+                                } catch (e) { /* skip */ }
+                            }
+                        } catch (e) { /* skip closed pages */ }
+                    }
+
+                    if (webviewCount > 0) {
+                        injectedCount += webviewCount;
+                        console.log(`🌐 Bridge injected into ${webviewCount} webview target(s)!`);
+                    }
+                } catch (e) {
+                    console.log(`⚠️ Webview injection error: ${e.message}`);
+                }
+            }
             return injectedCount > 0;
 
         } catch (err) {
@@ -2591,83 +2763,193 @@ class AntigravityBridge {
     }
 
     // ========================================================================
+    // 📊 QUOTA MONITOR — Read status bar quota info via CDP
+    // ========================================================================
+
+    /**
+     * Read quota information from Antigravity status bar
+     * The quota is in the aria-label of #jlcodes\\.antigravity-cockpit element
+     * @returns {string|null} Formatted quota text
+     */
+    async getQuota() {
+        if (!this.page) return null;
+
+        try {
+            const result = await this.page.evaluate(() => {
+                // The status bar quota element
+                const el = document.getElementById('jlcodes.antigravity-cockpit');
+                if (!el) return null;
+
+                const ariaLabel = el.getAttribute('aria-label') || '';
+                if (!ariaLabel) return null;
+
+                return ariaLabel;
+            });
+
+            if (!result) return null;
+
+            // Parse the aria-label into clean text for Telegram
+            // The aria-label contains markdown table format
+            // Extract model names and percentages
+            const lines = result.split('\n');
+            let output = '';
+            for (const line of lines) {
+                const trimmed = line.trim();
+                // Skip empty lines, separators, headers
+                if (!trimmed || trimmed === '---' || trimmed.startsWith('| :') || trimmed === '| | | |') continue;
+                if (trimmed.startsWith('*')) continue; // Skip footer
+
+                // Extract model lines with percentages
+                // Format: | 🟡 **Claude Opus 4.5 (Thinking)** | `■■□□□□□□□□` | 20.00% → 1h 4m (22:07) |
+                const percentMatch = trimmed.match(/([🟡🟢🔴⚪]\s*\*?\*?[\w\s.()]+\*?\*?)\s*\|\s*`([^`]+)`\s*\|\s*([\d.]+%\s*→\s*[^|]+)/);
+                if (percentMatch) {
+                    const name = percentMatch[1].replace(/\*\*/g, '').replace(/&nbsp;/g, '').trim();
+                    const bar = percentMatch[2];
+                    const info = percentMatch[3].trim();
+                    output += `${name}  ${bar}  ${info}\n`;
+                    continue;
+                }
+
+                // Group headers: | **Claude** | | |
+                const headerMatch = trimmed.match(/\|\s*\*\*([^*]+)\*\*\s*\|/);
+                if (headerMatch && !trimmed.includes('%')) {
+                    output += `\n📁 ${headerMatch[1]}\n`;
+                }
+            }
+
+            return output.trim() || result.substring(0, 2000);
+        } catch (e) {
+            console.error('❌ getQuota error:', e.message);
+            return null;
+        }
+    }
+
+    // ========================================================================
     // 🚀 OPTION 1: CONTEXT-BASED INJECTION (Antigravity-Shit-Chat Style)
     // Production-level implementation - Simple, Fast, Reliable
     // ========================================================================
 
     /**
-     * 🔍 Find Chat Context (Antigravity-Shit-Chat Style)
-     * Tìm ĐÚNG frame chứa chat UI (#cascade element)
-     * Chạy 1 LẦN khi init, cache lại để dùng mãi
-     * @returns {Frame|null}
+     * 🔍 Find Chat Context — search ALL CDP targets including webviews
+     * VS Code webview panels are separate targets not exposed by browser.pages()
+     * We fetch /json endpoint directly to get ALL targets
+     * @returns {Page|Frame|null}
      */
     async findChatContext() {
-        if (!this.page) return null;
+        if (!this.browser) return null;
 
         // Return cache if still valid
         if (this.cachedChatFrame) {
             try {
-                // Verify frame still exists and accessible
                 const isValid = await this.cachedChatFrame.evaluate(() => {
-                    return !!document.getElementById('cascade');
+                    return !!document.querySelector('[data-lexical-editor="true"][contenteditable="true"]');
                 }).catch(() => false);
 
                 if (isValid) {
-                    console.log('✅ CDP: Using cached chat frame');
+                    console.log('✅ CDP: Using cached chat context');
                     return this.cachedChatFrame;
                 }
             } catch (e) {
-                // Cache invalid, clear it
-                console.log('⚠️ CDP: Cached frame invalid, re-discovering...');
+                console.log('⚠️ CDP: Cached context invalid, re-discovering...');
                 this.cachedChatFrame = null;
             }
         }
 
-        // ========== DISCOVERY LOGIC (giống Antigravity-Shit-Chat) ==========
-        console.log('🔍 CDP: Discovering chat context...');
-        const frames = this.page.frames();
+        // ========== STEP 1: Try browser.pages() first (fast path) ==========
+        try {
+            const allPages = await this.browser.pages();
+            for (const page of allPages) {
+                const contexts = [page, ...page.frames()];
+                for (const ctx of contexts) {
+                    try {
+                        const hasEditor = await ctx.evaluate(() => {
+                            const el = document.querySelector('[data-lexical-editor="true"][contenteditable="true"]');
+                            if (!el) return false;
+                            const r = el.getBoundingClientRect();
+                            return r.width > 0 && r.height > 0;
+                        }).catch(() => false);
 
-        for (const frame of frames) {
-            const frameUrl = frame.url();
+                        if (hasEditor) {
+                            const isTerminal = await ctx.evaluate(() =>
+                                !!document.querySelector('.xterm, .xterm-viewport')
+                            ).catch(() => false);
+                            if (isTerminal) continue;
 
-            // Skip empty/devtools
-            if (!frameUrl || frameUrl === 'about:blank' || frameUrl.includes('devtools')) {
-                continue;
+                            console.log(`✅ CDP: Found chat context via pages()`);
+                            this.cachedChatFrame = ctx;
+                            return ctx;
+                        }
+                    } catch (e) { continue; }
+                }
+            }
+        } catch (e) { /* continue to step 2 */ }
+
+        // ========== STEP 2: Fetch ALL targets from /json endpoint ==========
+        console.log('🔍 CDP: Searching webview targets via /json...');
+        try {
+            const res = await fetch(`${this.debugUrl}/json`);
+            const targets = await res.json();
+            console.log(`🔍 CDP: Found ${targets.length} total targets:`);
+
+            // Log all targets for debugging
+            for (const t of targets) {
+                console.log(`   [${t.type}] "${t.title?.substring(0, 50)}" : ${t.url?.substring(0, 60)}`);
             }
 
-            // ✅ PRIORITY: Look for workbench.html (Antigravity main UI)
-            // Đây là cách Shit-Chat filter targets!
-            if (!frameUrl.includes('workbench')) {
-                continue;
-            }
+            // Try webview and other non-page targets that have webSocketDebuggerUrl
+            for (const target of targets) {
+                if (!target.webSocketDebuggerUrl) continue;
 
-            try {
-                // ✅ CHECK: Frame có chứa #cascade element không?
-                // #cascade = Antigravity chat container
-                const hasCascade = await frame.evaluate(() => {
-                    const cascade = document.getElementById('cascade');
-                    return !!cascade;
-                }).catch(() => false);
+                // Skip targets we already checked via pages()
+                if (target.type === 'page') continue;
 
-                if (!hasCascade) {
+                try {
+                    // Connect to this specific target
+                    const targetBrowser = await require('puppeteer-core').connect({
+                        browserWSEndpoint: target.webSocketDebuggerUrl,
+                        defaultViewport: null
+                    });
+
+                    const targetPages = await targetBrowser.pages();
+                    for (const tp of targetPages) {
+                        const contexts = [tp, ...tp.frames()];
+                        for (const ctx of contexts) {
+                            try {
+                                const hasEditor = await ctx.evaluate(() => {
+                                    const el = document.querySelector('[data-lexical-editor="true"][contenteditable="true"]');
+                                    if (!el) return false;
+                                    const r = el.getBoundingClientRect();
+                                    return r.width > 0 && r.height > 0;
+                                }).catch(() => false);
+
+                                if (hasEditor) {
+                                    const isTerminal = await ctx.evaluate(() =>
+                                        !!document.querySelector('.xterm, .xterm-viewport')
+                                    ).catch(() => false);
+                                    if (isTerminal) continue;
+
+                                    console.log(`✅ CDP: Found chat context in webview target!`);
+                                    console.log(`    ↳ Type: ${target.type}, Title: ${target.title}`);
+                                    this.cachedChatFrame = ctx;
+                                    this._chatTargetBrowser = targetBrowser; // keep reference
+                                    return ctx;
+                                }
+                            } catch (e) { continue; }
+                        }
+                    }
+
+                    // Not found in this target, disconnect
+                    targetBrowser.disconnect();
+                } catch (e) {
+                    // Can't connect to this target, skip
                     continue;
                 }
-
-                // ✅ FOUND CHAT CONTEXT!
-                console.log(`✅ CDP: Found chat context in: ${frameUrl.substring(0, 80)}...`);
-                console.log('    ↳ Contains #cascade element (Antigravity chat UI)');
-
-                // Cache it
-                this.cachedChatFrame = frame;
-                return frame;
-
-            } catch (e) {
-                // Frame access error, skip
-                continue;
             }
+        } catch (e) {
+            console.log(`⚠️ CDP: Error fetching /json: ${e.message}`);
         }
 
-        console.log('❌ CDP: Chat context NOT found (no #cascade element)');
+        console.log('❌ CDP: Chat context NOT found (no Lexical editor in any target)');
         return null;
     }
 
