@@ -16,6 +16,18 @@
 
 ---
 
+## 🎯 What is AntiBridge?
+
+**AntiBridge** is a web-based remote control interface for [Antigravity AI](https://antigravity.google). Send prompts, switch AI models, and control your AI agent from anywhere using your phone or any browser.
+
+### 🔗 Related Project
+
+| Project | Description |
+|---------|-------------|
+| 🤖 **[AntiBridge-AutoAccept](https://github.com/linhbq82/Antibridge-autoaccep-for-antigravity)** | Companion extension for auto-accepting AI actions |
+
+---
+
 ## 🚀 Quick Start
 
 ### Requirements
