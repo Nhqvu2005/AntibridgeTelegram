@@ -390,11 +390,18 @@ class TelegramBotService {
         let stableCount = 0;
         let responseSentViaPolling = false;
         const startTime = Date.now();
+        const myGeneration = this._pollGeneration || 0; // snapshot current generation
 
         console.log('🔄 Starting CDP response polling (fast 2min → slow 15min)...');
 
         const doPoll = async () => {
             if (responseSentViaPolling) return;
+
+            // Cancel if a new user message reset the generation
+            if ((this._pollGeneration || 0) !== myGeneration) {
+                console.log('🛑 Poll cancelled (new user message started)');
+                return;
+            }
 
             const elapsed = Date.now() - startTime;
             pollCount++;
@@ -590,6 +597,7 @@ if ($proc) {
 
     /**
      * Reset active response message — call when user sends new message
+     * Increments _pollGeneration to auto-cancel any in-progress polling
      */
     _resetActiveResponse() {
         this._activeResponseMsgId = null;
@@ -597,6 +605,7 @@ if ($proc) {
         this._lastEditTime = null;
         this._sendLock = Promise.resolve(); // reset lock chain
         this.lastSentText = null;
+        this._pollGeneration = (this._pollGeneration || 0) + 1; // cancel old polls
         if (this.streamingTimeout) {
             clearTimeout(this.streamingTimeout);
             this.streamingTimeout = null;

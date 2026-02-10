@@ -1,91 +1,97 @@
-# AntiBridge - Antigravity Remote
+# 🌉 AntiBridge - Antigravity Telegram Remote
 
-**[Tiếng Việt]**  
-Một cầu nối mạnh mẽ giữa **Antigravity IDE** và **Telegram**, cho phép bạn điều khiển, chat và giám sát AI từ xa.
+> Điều khiển Antigravity IDE từ xa qua Telegram — Chat AI, giám sát quota, và nhiều hơn thế.
 
-**[English]**  
-A powerful bridge between **Antigravity IDE** and **Telegram**, allowing you to control, chat, and monitor your AI remotely.
+[English Version](README_EN.md)
 
 ---
 
-## 🌟 Tính Năng Nổi Bật / Key Features
+## ✨ Tính Năng
 
-- **✅ Chat 2 chiều / 2-way Chat**: Gửi tin nhắn từ Telegram vào Antigravity và nhận câu trả lời AI.
-- **✅ Smart Polling**: Tự động điều chỉnh thời gian chờ (ngắn/dài) để bắt trọn vẹn câu trả lời mà không lo timeout.
-- **✅ Single Message UI**: Cập nhật câu trả lời AI liên tục trên **một tin nhắn duy nhất**, không spam tin nhắn mới.
-- **✅ CDP Direct Injection**: Gửi lệnh trực tiếp qua Chrome DevTools Protocol (CDP) — **không chiếm chuột, không minimize cửa sổ**.
-- **✅ Quota Monitor**: Xem dung lượng sử dụng các model AI ngay trên Telegram với lệnh `/quota`.
-- **✅ Multi-Model Supports**: Hỗ trợ chuyển đổi model AI dễ dàng.
-
----
-
-## Credits
-
-Dự án này được phát triển dựa trên core của [AntiBridge-Antigravity-remote](https://github.com/linhbq82/AntiBridge-Antigravity-remote).
-Xin chân thành cảm ơn tác giả **linhbq82** đã đặt nền móng cho công cụ tuyệt vời này.
-
-This project is built upon the core of [AntiBridge-Antigravity-remote](https://github.com/linhbq82/AntiBridge-Antigravity-remote).
-Special thanks to **linhbq82** for laying the foundation for this amazing tool.
+| Tính năng | Mô tả |
+|-----------|-------|
+| 💬 **Chat 2 chiều** | Gửi tin nhắn từ Telegram → Antigravity, nhận câu trả lời AI ngay trên Telegram |
+| 📝 **Single Message** | Mọi update (thinking, streaming, final) trên **1 tin nhắn duy nhất** — không spam |
+| 🔧 **CDP Injection** | Gửi lệnh qua Chrome DevTools Protocol — không chiếm chuột, không minimize cửa sổ |
+| 📊 **Quota Monitor** | Xem % sử dụng các model AI (Claude, Gemini, GPT) với `/quota` |
+| ⏱️ **Smart Polling** | Tự động điều chỉnh tốc độ polling (nhanh 3s → chậm 10s, tối đa 15 phút) |
+| 🤖 **Đổi Model** | Chuyển đổi model AI ngay trên Telegram với `/model` |
+| 📸 **Screenshot** | Chụp ảnh Antigravity IDE gửi về Telegram |
 
 ---
 
-## 📦 Cài Đặt / Installation
+## 🙏 Credits
 
-### Yêu cầu / Requirements
-- Node.js (v18+)
-- Antigravity IDE (đang chạy với cổng debug mở sẵn)
+Dự án này được phát triển dựa trên nền tảng [AntiBridge-Antigravity-remote](https://github.com/linhbq82/AntiBridge-Antigravity-remote) của **linhbq82**.
 
-### Các bước / Steps
-
-1. **Clone repo & Install dependencies**:
-   ```bash
-   git clone https://github.com/htcba/AntibridgeTelegram.git
-   cd AntibridgeTelegram
-   npm install
-   ```
-
-2. **Cấu hình / Configuration**:
-   - Copy file `.env.example` thành `.env`:
-     ```bash
-     cp .env.example .env
-     ```
-   - Điền thông tin vào `.env`:
-     ```ini
-     TELEGRAM_BOT_TOKEN=your_bot_token_here
-     TELEGRAM_CHAT_ID=your_chat_id_here
-     CDP_PORT=9000  # Default Antigravity debug port
-     ```
-
-3. **Khởi chạy / Run**:
-   - Chạy file `START_TELEGRAM.bat` (Windows)
-   - Hoặc chạy lệnh:
-     ```bash
-     npm start
-     ```
+Xin chân thành cảm ơn tác giả gốc đã tạo ra công cụ tuyệt vời này. Phiên bản này là bản cập nhật và cải tiến thêm các tính năng mới.
 
 ---
 
-## 🎮 Sử dụng / Usage
+## 📦 Cài Đặt
 
-Sau khi khởi chạy, bot Telegram của bạn sẽ online. Bạn có thể sử dụng các lệnh sau:
+### Yêu cầu
+- **Node.js** v18 trở lên
+- **Antigravity IDE** đang chạy với cổng debug mở (mặc định: 9000)
 
-| Lệnh / Command | Mô tả / Description |
-|----------------|---------------------|
-| `/start`       | Khởi động và kiểm tra kết nối |
-| `/status`      | Kiểm tra trạng thái kết nối tới Antigravity |
-| `/quota`       | 📊 Xem dung lượng sử dụng các model AI |
-| `/stop`        | Dừng AI đang trả lời (Stop generation) |
-| `/clear`       | Xóa lịch sử chat (New context) |
-| `/screenshot`  | Chụp ảnh màn hình Antigravity gửi về Tele |
-| `/reconnect`   | Kết nối lại tới CDP nếu bị mất kết nối |
+### Hướng dẫn
+
+```bash
+# 1. Clone repo
+git clone https://github.com/Nhqvu2005/AntibridgeTelegram.git
+cd AntibridgeTelegram
+
+# 2. Cài dependencies
+npm install
+
+# 3. Cấu hình
+cp .env.example .env
+# Mở file .env, điền:
+#   TELEGRAM_BOT_TOKEN=<token từ @BotFather>
+#   TELEGRAM_CHAT_ID=<chat ID của bạn>
+#   CDP_PORT=9000
+```
+
+### Khởi chạy
+
+**Windows** — Chạy file `START_TELEGRAM.bat`
+
+**Hoặc chạy trực tiếp:**
+```bash
+npm run telegram
+```
 
 ---
 
-## 🛠️ Troubleshoot
+## 🎮 Các Lệnh Telegram
 
-- **Lỗi "CDP Chat context not found"**: Đảm bảo Antigravity đang mở và bạn đã login.
-- **Không nhận được tin nhắn**: Kiểm tra `TELEGRAM_CHAT_ID` có đúng không.
+| Lệnh | Mô tả |
+|-------|-------|
+| `/start` | 👋 Khởi động bot, kiểm tra kết nối |
+| `/status` | 📊 Trạng thái kết nối tới Antigravity |
+| `/quota` | 📊 Xem dung lượng sử dụng model AI |
+| `/model` | 🎨 Đổi model AI (Claude, Gemini, GPT...) |
+| `/stop` | ⏹️ Dừng AI đang trả lời |
+| `/screenshot` | 📸 Chụp ảnh màn hình Antigravity |
+| `/reconnect` | 🔄 Kết nối lại CDP |
+| `/clear` | 🗑️ Xóa lịch sử chat |
+| `/accept` | ✅ Accept action hiện tại |
+| `/reject` | ❌ Reject action hiện tại |
 
 ---
 
-**Disclaimer**: This is an unofficial tool and is not affiliated with Antigravity. Use at your own risk.
+## 🛠️ Xử Lý Sự Cố
+
+| Lỗi | Giải pháp |
+|-----|-----------|
+| `CDP Chat context NOT found` | Đảm bảo Antigravity đang mở và bạn đã login. Thử `/reconnect`. |
+| `Không nhận được tin nhắn` | Kiểm tra `TELEGRAM_CHAT_ID` trong `.env` có đúng không. |
+| `Bot không phản hồi` | Kiểm tra `TELEGRAM_BOT_TOKEN` và chạy lại `npm run telegram`. |
+
+---
+
+## 📄 License
+
+MIT — Xem file [LICENSE](LICENSE) để biết thêm chi tiết.
+
+**Disclaimer**: Đây là công cụ không chính thức, không liên kết với Antigravity. Sử dụng theo trách nhiệm cá nhân.
