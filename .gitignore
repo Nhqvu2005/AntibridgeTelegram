@@ -1,56 +1,24 @@
 # Dependencies
 node_modules/
-package-lock.json
-
-# Logs
-logs/
-*.log
-npm-debug.log*
-
-# Database
-*.db
-*.sqlite
-db/sessions.json
 
 # Environment
 .env
 .env.local
+.env.*.local
+
+# Quota data (chứa email + thông tin user)
+quota_history.json
+quota_raw_*.json
+
+# OS files
+Thumbs.db
+Desktop.ini
+.DS_Store
 
 # IDE
 .vscode/
 .idea/
-*.swp
-*.swo
 
-# OS
-.DS_Store
-Thumbs.db
-
-# Backup files
-*.backup
-*.bak
-*_backup_*
-
-# Development files
-_*.js
-_*.md
-*.test.js
-test/
-
-# Build output
-dist/
-build/
-
-# Temporary files
-tmp/
-temp/
-*.tmp
-
-# Data
-Data/
-
-# Media files (non-release)
-
-
-# Release notes (internal)
-RELEASE_PACKAGE.md
+# Logs
+*.log
+npm-debug.log*
