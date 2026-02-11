@@ -401,15 +401,20 @@ class QuotaService {
     }
 
     // ========================================
-    // PHẦN 7: Format History cho Telegram
+    // PHẦN 7: Format History cho Telegram (chỉ hiện delta)
     // ========================================
 
-    formatHistoryForTelegram(n = 10) {
+    formatHistoryForTelegram(n = 15) {
         const history = this.loadHistory();
-        if (!history.length) return '📭 Chưa có lịch sử quota. Gõ /quota để bắt đầu!';
+        if (!history.length) return '📭 Chưa có lịch sử quota.\nBot tự động check mỗi 5 phút, hoặc gõ /quota để check ngay!';
 
-        const recent = history.slice(-n);
-        let msg = `📜 LỊCH SỬ QUOTA (${recent.length}/${history.length})\n`;
+        // Chỉ lấy entries CÓ deltas (có thay đổi)
+        const withDeltas = history.filter(e => e.deltas && Object.keys(e.deltas).length > 0);
+        if (!withDeltas.length) return '📭 Chưa có thay đổi quota nào được ghi nhận.\nBot đang theo dõi ngầm mỗi 5 phút...';
+
+        const recent = withDeltas.slice(-n);
+        let msg = `📜 LỊCH SỬ THAY ĐỔI QUOTA\n`;
+        msg += `(${recent.length} thay đổi / ${history.length} lần check)\n`;
         msg += `━━━━━━━━━━━━━━━━━━━━\n`;
 
         for (const entry of recent) {
@@ -421,42 +426,91 @@ class QuotaService {
 
             const deltas = entry.deltas || {};
 
-            // Credits line
-            let creditLine = `💳${entry.prompt_credits}`;
+            msg += `\n🕐 ${ts}\n`;
+
+            // Credit deltas
             if (deltas.prompt_credits) {
                 const sign = deltas.prompt_credits > 0 ? '+' : '';
-                creditLine += `(${sign}${deltas.prompt_credits})`;
+                const icon = deltas.prompt_credits > 0 ? '📈' : '📉';
+                msg += `  ${icon} 💳 Prompt: ${sign}${deltas.prompt_credits} → ${entry.prompt_credits}\n`;
             }
-            creditLine += ` 🌊${entry.flow_credits}`;
             if (deltas.flow_credits) {
                 const sign = deltas.flow_credits > 0 ? '+' : '';
-                creditLine += `(${sign}${deltas.flow_credits})`;
+                const icon = deltas.flow_credits > 0 ? '📈' : '📉';
+                msg += `  ${icon} 🌊 Flow: ${sign}${deltas.flow_credits} → ${entry.flow_credits}\n`;
             }
 
-            msg += `\n[${ts}] ${creditLine}\n`;
-
-            // Model changes
+            // Model deltas
             const modelDeltas = deltas.models || {};
-            const changedModels = (entry.models || []).filter(m => {
-                return m.label in modelDeltas;
-            });
-
-            if (changedModels.length > 0) {
-                for (const m of changedModels) {
-                    const d = modelDeltas[m.label];
-                    const pct = m.remaining !== null ? Math.round(m.remaining * 100) + '%' : 'N/A';
-                    if (d === 'NEW') {
-                        msg += `  🆕 ${m.label}: ${pct}\n`;
-                    } else {
-                        const sign = d > 0 ? '+' : '';
-                        const icon = d > 0 ? '📈' : '📉';
-                        msg += `  ${icon} ${m.label}: ${pct} (${sign}${d}%)\n`;
-                    }
+            for (const m of (entry.models || [])) {
+                if (!(m.label in modelDeltas)) continue;
+                const d = modelDeltas[m.label];
+                const pct = m.remaining !== null ? Math.round(m.remaining * 100) + '%' : 'N/A';
+                if (d === 'NEW') {
+                    msg += `  🆕 ${m.label}: ${pct}\n`;
+                } else {
+                    const sign = d > 0 ? '+' : '';
+                    const icon = d > 0 ? '📈' : '📉';
+                    msg += `  ${icon} ${m.label}: ${pct} (${sign}${d}%)\n`;
                 }
             }
         }
 
         return msg.trim();
+    }
+
+    // ========================================
+    // PHẦN 8: Background Monitor (5 phút check 1 lần)
+    // ========================================
+
+    /**
+     * Bắt đầu theo dõi quota ngầm — check mỗi intervalMs.
+     * Chỉ ghi log khi có thay đổi.
+     * @param {number} intervalMs - Khoảng cách mỗi lần check (default: 5 phút)
+     */
+    startMonitor(intervalMs = 5 * 60 * 1000) {
+        if (this._monitorTimer) {
+            console.log('[QuotaService] ⚠️ Monitor đã đang chạy');
+            return;
+        }
+
+        console.log(`[QuotaService] 🔄 Bắt đầu monitor quota (mỗi ${intervalMs / 60000} phút)`);
+
+        // Check lần đầu sau 30s (chờ hệ thống khởi động)
+        this._monitorTimer = setTimeout(async () => {
+            await this._doMonitorCheck();
+            // Sau đó check đều đặn
+            this._monitorTimer = setInterval(() => this._doMonitorCheck(), intervalMs);
+        }, 30000);
+    }
+
+    stopMonitor() {
+        if (this._monitorTimer) {
+            clearInterval(this._monitorTimer);
+            clearTimeout(this._monitorTimer);
+            this._monitorTimer = null;
+            console.log('[QuotaService] 🛑 Đã dừng monitor quota');
+        }
+    }
+
+    async _doMonitorCheck() {
+        try {
+            const data = await this.getQuotaData();
+            if (!data) {
+                console.log('[QuotaService] ⚠️ Monitor: không lấy được data');
+                return;
+            }
+
+            const changed = this.saveToHistory(data);
+            const now = new Date().toLocaleTimeString('vi-VN');
+            if (changed) {
+                console.log(`[QuotaService] 📝 [${now}] Quota thay đổi — đã ghi log`);
+            } else {
+                console.log(`[QuotaService] ✅ [${now}] Quota không đổi`);
+            }
+        } catch (e) {
+            console.error(`[QuotaService] ❌ Monitor error: ${e.message}`);
+        }
     }
 }
 

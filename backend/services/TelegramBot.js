@@ -42,6 +42,9 @@ class TelegramBotService {
         this._setupMessageHandler();
         this._setupCallbackHandler();
 
+        // Start background quota monitor (check mỗi 5 phút)
+        this.quotaService.startMonitor();
+
         console.log('🤖 Telegram Bot initialized');
     }
 
