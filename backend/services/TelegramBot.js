@@ -8,6 +8,7 @@ const TelegramBot = require('node-telegram-bot-api');
 const { exec } = require('child_process');
 const path = require('path');
 const fs = require('fs');
+const QuotaService = require('./QuotaService');
 
 class TelegramBotService {
     constructor({ botToken, chatId, antigravityBridge, acceptDetector, messageLogger, eventBus }) {
@@ -35,6 +36,7 @@ class TelegramBotService {
 
         // Initialize bot
         this.bot = new TelegramBot(this.botToken, { polling: true });
+        this.quotaService = new QuotaService();
 
         this._setupCommands();
         this._setupMessageHandler();
@@ -60,6 +62,7 @@ class TelegramBotService {
             { command: 'reconnect', description: '🔄 Reconnect CDP' },
             { command: 'clear', description: '🗑️ Xóa chat history' },
             { command: 'quota', description: '📊 Xem quota Antigravity' },
+            { command: 'history_quota', description: '📜 Lịch sử thay đổi quota' },
         ]);
 
         this.bot.onText(/\/start/, (msg) => this._handleStart(msg));
@@ -72,6 +75,7 @@ class TelegramBotService {
         this.bot.onText(/\/reconnect/, (msg) => this._handleReconnect(msg));
         this.bot.onText(/\/clear/, (msg) => this._handleClear(msg));
         this.bot.onText(/\/quota/, (msg) => this._handleQuota(msg));
+        this.bot.onText(/\/history_quota/, (msg) => this._handleHistoryQuota(msg));
     }
 
     _isAuthorized(msg) {
@@ -281,20 +285,33 @@ class TelegramBotService {
         if (!this._isAuthorized(msg)) return;
 
         try {
-            if (!this.antigravityBridge?.isConnected) {
-                await this.sendMessage('❌ Chưa kết nối Antigravity. Dùng /reconnect');
+            await this.sendMessage('⏳ Đang lấy quota...');
+
+            const data = await this.quotaService.getQuotaData();
+            if (!data) {
+                await this.sendMessage('❌ Không lấy được quota. Kiểm tra Antigravity đang chạy?');
                 return;
             }
 
-            const quota = await this.antigravityBridge.getQuota();
-            if (!quota) {
-                await this.sendMessage('❌ Không đọc được quota. Kiểm tra Antigravity đang chạy?');
-                return;
-            }
+            // Save to history
+            this.quotaService.saveToHistory(data);
 
-            await this.sendMessage(`📊 Antigravity Quota\n\n${quota}`);
+            // Format and send
+            const formatted = this.quotaService.formatQuotaForTelegram(data);
+            await this.sendMessage(formatted || '❌ Không parse được quota');
         } catch (e) {
             await this.sendMessage(`❌ Quota error: ${e.message}`);
+        }
+    }
+
+    async _handleHistoryQuota(msg) {
+        if (!this._isAuthorized(msg)) return;
+
+        try {
+            const formatted = this.quotaService.formatHistoryForTelegram(15);
+            await this.sendMessage(formatted);
+        } catch (e) {
+            await this.sendMessage(`❌ History error: ${e.message}`);
         }
     }
 
