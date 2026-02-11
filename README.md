@@ -13,7 +13,9 @@
 | 💬 **Chat 2 chiều** | Gửi tin nhắn từ Telegram → Antigravity, nhận câu trả lời AI ngay trên Telegram |
 | 📝 **Single Message** | Mọi update (thinking, streaming, final) trên **1 tin nhắn duy nhất** — không spam |
 | 🔧 **CDP Injection** | Gửi lệnh qua Chrome DevTools Protocol — không chiếm chuột, không minimize cửa sổ |
-| 📊 **Quota Monitor** | Xem % sử dụng các model AI (Claude, Gemini, GPT) với `/quota` |
+| 📊 **Quota Monitor** | Xem % sử dụng các model AI (Claude, Gemini, GPT) qua API nội bộ |
+| 🔄 **Auto Monitor** | Tự động check quota mỗi 5 phút, **chỉ ghi log khi có thay đổi** |
+| 📜 **Quota History** | Xem lịch sử cộng/trừ quota với `/history_quota` — theo dõi delta |
 | ⏱️ **Smart Polling** | Tự động điều chỉnh tốc độ polling (nhanh 3s → chậm 10s, tối đa 15 phút) |
 | 🤖 **Đổi Model** | Chuyển đổi model AI ngay trên Telegram với `/model` |
 | 📸 **Screenshot** | Chụp ảnh Antigravity IDE gửi về Telegram |
@@ -69,7 +71,8 @@ npm run telegram
 |-------|-------|
 | `/start` | 👋 Khởi động bot, kiểm tra kết nối |
 | `/status` | 📊 Trạng thái kết nối tới Antigravity |
-| `/quota` | 📊 Xem dung lượng sử dụng model AI |
+| `/quota` | 📊 Xem quota model AI (realtime + lưu history) |
+| `/history_quota` | 📜 Xem lịch sử thay đổi quota (cộng/trừ) |
 | `/model` | 🎨 Đổi model AI (Claude, Gemini, GPT...) |
 | `/stop` | ⏹️ Dừng AI đang trả lời |
 | `/screenshot` | 📸 Chụp ảnh màn hình Antigravity |

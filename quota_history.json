@@ -163,5 +163,63 @@
         "Claude Opus 4.6 (Thinking)": -40
       }
     }
+  },
+  {
+    "timestamp": "2026-02-11T18:36:01.914Z",
+    "user": "feliprim@gmail.com",
+    "plan": "Pro",
+    "prompt_credits": 500,
+    "flow_credits": 100,
+    "models": [
+      {
+        "label": "Gemini 3 Pro (High)",
+        "remaining": 1,
+        "reset_time": "2026-02-11T21:44:11Z"
+      },
+      {
+        "label": "Gemini 3 Pro (Low)",
+        "remaining": 1,
+        "reset_time": "2026-02-11T21:44:11Z"
+      },
+      {
+        "label": "Gemini 3 Flash",
+        "remaining": 1,
+        "reset_time": "2026-02-11T23:34:38Z"
+      },
+      {
+        "label": "Claude Sonnet 4.5",
+        "remaining": 0.8,
+        "reset_time": "2026-02-11T21:52:01Z"
+      },
+      {
+        "label": "Claude Sonnet 4.5 (Thinking)",
+        "remaining": 0.8,
+        "reset_time": "2026-02-11T21:52:01Z"
+      },
+      {
+        "label": "Claude Opus 4.5 (Thinking)",
+        "remaining": 0.8,
+        "reset_time": "2026-02-11T21:52:01Z"
+      },
+      {
+        "label": "Claude Opus 4.6 (Thinking)",
+        "remaining": 0.8,
+        "reset_time": "2026-02-11T21:52:01Z"
+      },
+      {
+        "label": "GPT-OSS 120B (Medium)",
+        "remaining": 0.8,
+        "reset_time": "2026-02-11T21:52:01Z"
+      }
+    ],
+    "deltas": {
+      "models": {
+        "Claude Sonnet 4.5": 60,
+        "Claude Sonnet 4.5 (Thinking)": 60,
+        "Claude Opus 4.5 (Thinking)": 60,
+        "Claude Opus 4.6 (Thinking)": 60,
+        "GPT-OSS 120B (Medium)": 60
+      }
+    }
   }
 ]

@@ -13,7 +13,9 @@
 | 💬 **2-way Chat** | Send messages from Telegram → Antigravity, receive AI responses on Telegram |
 | 📝 **Single Message** | All updates (thinking, streaming, final) on **one single message** — no spam |
 | 🔧 **CDP Injection** | Send commands via Chrome DevTools Protocol — no mouse stealing, no window minimizing |
-| 📊 **Quota Monitor** | View AI model usage (Claude, Gemini, GPT) with `/quota` |
+| 📊 **Quota Monitor** | View AI model usage (Claude, Gemini, GPT) via internal API |
+| 🔄 **Auto Monitor** | Auto-check quota every 5 minutes, **only logs when changes detected** |
+| 📜 **Quota History** | View quota change log with `/history_quota` — track deltas |
 | ⏱️ **Smart Polling** | Auto-adjusting poll speed (fast 3s → slow 10s, max 15 minutes) |
 | 🤖 **Model Switch** | Switch AI models on Telegram with `/model` |
 | 📸 **Screenshot** | Capture Antigravity IDE screenshot to Telegram |
@@ -69,7 +71,8 @@ npm run telegram
 |---------|-------------|
 | `/start` | 👋 Start bot, check connection |
 | `/status` | 📊 Connection status to Antigravity |
-| `/quota` | 📊 View AI model usage quotas |
+| `/quota` | 📊 View AI model quotas (realtime + save to history) |
+| `/history_quota` | 📜 View quota change log (deltas only) |
 | `/model` | 🎨 Switch AI model (Claude, Gemini, GPT...) |
 | `/stop` | ⏹️ Stop AI generation |
 | `/screenshot` | 📸 Screenshot Antigravity IDE |
