@@ -28,6 +28,9 @@ class TelegramBotService {
         this.lastSentText = '';
         this.isProcessing = false;
 
+        // Manual override for project root (fallback if CDP fails)
+        this.manualProjectRoot = null;
+
         // Load available models from env
         this.availableModels = (process.env.AVAILABLE_MODELS || '')
             .split(',')
@@ -85,6 +88,7 @@ class TelegramBotService {
         this.bot.onText(/\/history_quota/, (msg) => this._handleHistoryQuota(msg));
         this.bot.onText(/\/conversations/, (msg) => this._handleConversations(msg));
         this.bot.onText(/\/open(.*)/, (msg, match) => this._handleOpen(msg, match));
+        this.bot.onText(/\/setproject(.*)/, (msg, match) => this._handleSetProject(msg, match));
         this.bot.onText(/\/workflows/, (msg) => this._handleWorkflows(msg));
         this.bot.onText(/\/skills/, (msg) => this._handleSkills(msg));
     }
@@ -479,9 +483,9 @@ class TelegramBotService {
             await this.sendMessage('⚡ Đang quét workflows...');
 
             // 1. Get current project root
-            const rootPath = await this.antigravityBridge.getCurrentProjectRoot();
+            const rootPath = await this._getProjectRoot();
             if (!rootPath) {
-                await this.sendMessage('❌ Không xác định được Project Root trên Antigravity (có thể chưa mở folder nào)');
+                await this.sendMessage('❌ Không xác định được Project Root.\n(Hãy dùng `/open` hoặc `/setproject <path>` để set thủ công)');
                 return;
             }
 
@@ -519,7 +523,7 @@ class TelegramBotService {
 
     async _executeWorkflow(filename, queryId) {
         try {
-            const rootPath = await this.antigravityBridge.getCurrentProjectRoot();
+            const rootPath = await this._getProjectRoot();
             if (!rootPath) throw new Error('Root path not found');
 
             const filePath = path.join(rootPath, '.agent', 'workflows', filename);
@@ -550,9 +554,9 @@ class TelegramBotService {
         try {
             await this.sendMessage('🛠️ Đang quét skills...');
 
-            const rootPath = await this.antigravityBridge.getCurrentProjectRoot();
+            const rootPath = await this._getProjectRoot();
             if (!rootPath) {
-                await this.sendMessage('❌ Không xác định được Project Root.');
+                await this.sendMessage('❌ Không xác định được Project Root.\n(Hãy dùng `/open` hoặc `/setproject <path>` để set thủ công)');
                 return;
             }
 
@@ -589,7 +593,7 @@ class TelegramBotService {
 
     async _handleSkillFolder(msg, folderName, isEdit = false) {
         try {
-            const rootPath = await this.antigravityBridge.getCurrentProjectRoot();
+            const rootPath = await this._getProjectRoot();
             const folderPath = path.join(rootPath, '.agent', 'skills', folderName);
 
             // List .md files in skill folder
@@ -972,6 +976,7 @@ if ($proc) {
                         await this.bot.answerCallbackQuery(query.id, { text: '📂 Đang mở dự án...' });
                         const result = await this.antigravityBridge.openProjectFolder(finalPath);
                         if (result?.success) {
+                            this.manualProjectRoot = finalPath; // Auto-set manual root fallback
                             await this.bot.sendMessage(`✅ Đã mở dự án: ${finalPath}`);
                         } else {
                             await this.bot.sendMessage(`❌ Lỗi mở dự án: ${result?.error}`);
@@ -1180,6 +1185,48 @@ if ($proc) {
 
     // ==========================================
     // HELPERS
+    // ==========================================
+
+    /**
+     * 🧠 Helper: Lấy Project Root (CDP -> Fallback Manual)
+     */
+    async _getProjectRoot() {
+        // 1. Try CDP
+        const cdpRoot = await this.antigravityBridge.getCurrentProjectRoot();
+        if (cdpRoot && !cdpRoot.startsWith('ERROR_') && cdpRoot !== 'NO_WORKSPACE') {
+            // Update manual root to sync
+            this.manualProjectRoot = cdpRoot;
+            return cdpRoot;
+        }
+
+        // 2. Fallback to manual
+        if (this.manualProjectRoot) {
+            console.log(`⚠️ Using manual project root: ${this.manualProjectRoot}`);
+            return this.manualProjectRoot;
+        }
+
+        return null;
+    }
+
+    /**
+     * 📁 Handler: /setproject <path>
+     */
+    async _handleSetProject(msg, match) {
+        if (!this._isAuthorized(msg)) return;
+        const pathStr = match[1] ? match[1].trim() : '';
+
+        if (!pathStr) {
+            await this.sendMessage('⚠️ Vui lòng nhập đường dẫn. Ví dụ: `/setproject G:\\Job\\MyProject`');
+            return;
+        }
+
+        if (fs.existsSync(pathStr)) {
+            this.manualProjectRoot = pathStr;
+            await this.sendMessage(`✅ Đã set Project Root thủ công: \`${pathStr}\`\n(Bạn có thể dùng /skills now!)`);
+        } else {
+            await this.sendMessage(`❌ Đường dẫn không tồn tại: \`${pathStr}\``);
+        }
+    }
     // ==========================================
 
     /**
