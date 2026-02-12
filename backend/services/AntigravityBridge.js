@@ -819,78 +819,167 @@ class AntigravityBridge {
         try {
             console.log('📂 CDP: Getting conversation list...');
 
-            // 1. Ensure history list is open
-            await this.page.evaluate(() => {
-                const historyBtn = document.querySelector('a[data-tooltip-id="history-tooltip"], [aria-label*="History"], .lucide-history')?.closest('a, button');
-                if (historyBtn) {
-                    // Check if list is already visible (check for "Current" label or specific list items)
-                    const listVisible = document.querySelector('.text-quickinput-foreground.text-xs.opacity-50');
-                    if (!listVisible) historyBtn.click();
+            // 1. Ensure history list is open — scan ALL frames since button is in webview
+            const checkSelector = () => {
+                const btn = document.querySelector('[data-tooltip-id="history-tooltip"]') ||
+                    document.querySelector('[data-past-conversations-toggle="true"]');
+                return {
+                    found: !!btn,
+                    tag: btn?.tagName,
+                    classes: btn?.className?.substring(0, 60)
+                };
+            };
+
+            let historyFrame = null; // Remember which frame has the button
+
+            // Check main page first
+            let btnDebug = await this.page.evaluate(checkSelector);
+            console.log('🔍 History Toggle Debug (main):', JSON.stringify(btnDebug));
+
+            if (!btnDebug.found) {
+                // Search in frames
+                const frames = this.page.frames();
+                console.log(`🔍 Searching ${frames.length} frames for history toggle...`);
+                for (const frame of frames) {
+                    try {
+                        const result = await frame.evaluate(checkSelector);
+                        const frameUrl = frame.url()?.substring(0, 60) || 'unknown';
+                        console.log(`   Frame [${frameUrl}]: found=${result.found}`);
+                        if (result.found) {
+                            btnDebug = result;
+                            historyFrame = frame;
+                            console.log(`   ✅ Found toggle in frame: ${frameUrl}`);
+                            break;
+                        }
+                    } catch (e) { /* skip inaccessible frames */ }
                 }
-            });
+            }
+
+            // Click the toggle if found (in the correct frame)
+            const targetContext = historyFrame || this.page;
+            if (btnDebug.found) {
+                await targetContext.evaluate(() => {
+                    const btn = document.querySelector('[data-tooltip-id="history-tooltip"]') ||
+                        document.querySelector('[data-past-conversations-toggle="true"]');
+                    if (btn) {
+                        btn.click();
+                        btn.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
+                    }
+                });
+                console.log('🔍 Clicked history toggle!');
+            } else {
+                console.log('⚠️ History toggle NOT found in any frame!');
+            }
 
             // Wait for list animation
             await new Promise(r => setTimeout(r, 500));
 
-            const frames = this.page.frames();
-            for (const frame of frames) {
-                const conversations = await frame.evaluate(() => {
-                    const items = [];
+            // Try to find history toggle and click it if needed
+            // But we don't want to close it if it's open.
+            // Best strategy: Check if items exist. If not, click toggle and check again.
 
-                    // 1. Get Current Conversation
-                    const currentContainer = document.querySelector('.text-quickinput-foreground.text-xs.opacity-50')?.parentElement;
-                    if (currentContainer) {
-                        const titleEl = currentContainer.querySelector('span.text-sm.truncate span');
-                        const timeEl = currentContainer.querySelector('span.text-xs.opacity-50.ml-4');
-                        if (titleEl) {
-                            items.push({
-                                title: titleEl.textContent.trim(),
-                                time: timeEl?.textContent.trim() || '',
-                                isCurrent: true,
-                                index: 0
-                            });
-                        }
+            // Defines helper to run in browser context
+            const scanDOM = () => {
+                const list = [];
+
+                // 1. Find Current Conversation
+                // Look for the specific background class for focus/selected item
+                const currentEl = document.querySelector('[class*="bg-quickinput-list-focusBackground"]');
+                if (currentEl) {
+                    let title = 'Current Conversation';
+
+                    // Try innerText first
+                    const rawText = currentEl.innerText || '';
+                    const parts = rawText.split('\n').map(s => s.trim()).filter(s => s);
+
+                    if (parts.length > 0) title = parts[0];
+
+                    // Fallback: try selector if innerText is weird
+                    const titleSpan = currentEl.querySelector('span.text-sm span');
+                    if (titleSpan && titleSpan.textContent) title = titleSpan.textContent;
+
+                    list.push({ title: title.trim(), isCurrent: true, index: 0 });
+                }
+
+                // 2. Find Other Conversations
+                const nodes = document.querySelectorAll('[class*="hover:bg-list-hover"]');
+                nodes.forEach((el, idx) => {
+                    // Skip current
+                    if (el.classList.contains('bg-quickinput-list-focusBackground')) return;
+
+                    let title = 'Conversation ' + (idx + 1);
+                    let time = '';
+
+                    const rawText = el.innerText || '';
+                    const parts = rawText.split('\n').map(s => s.trim()).filter(s => s);
+
+                    if (parts.length > 0) title = parts[0];
+                    if (parts.length > 1) time = parts[parts.length - 1];
+
+                    // Fallback selectors
+                    const spans = el.querySelectorAll('span');
+                    if (title.startsWith('Conversation') && spans.length > 0) {
+                        const tSpan = el.querySelector('span.text-sm span');
+                        if (tSpan) title = tSpan.textContent;
+                        else title = spans[0].textContent;
                     }
 
-                    // 2. Get Other Conversations
-                    const others = document.querySelectorAll('.px-2.5.cursor-pointer.flex.items-center.justify-between.hover\\:bg-list-hover');
-                    others.forEach((el, idx) => {
-                        const titleEl = el.querySelector('span.text-sm.truncate span');
-                        const timeEl = el.querySelector('span.text-xs.opacity-50.ml-4');
-                        if (titleEl) {
-                            items.push({
-                                title: titleEl.textContent.trim(),
-                                time: timeEl?.textContent.trim() || '',
-                                isCurrent: false,
-                                index: items.length // continue index
-                            });
-                        }
+                    list.push({
+                        title: title.trim(),
+                        time: time.trim() || '',
+                        isCurrent: false,
+                        index: list.length // continue index
                     });
-
-                    return items;
                 });
+                return list;
+            };
 
-                if (conversations && conversations.length > 0) {
-                    // Cache the frame context? No need, just return data
-                    return { success: true, daa: conversations }; // Typo fixed below
-                }
+            // 1. Try Main Frame & All Frames
+            const frames = this.page.frames();
+            let allItems = [];
+
+            // Check main frame first
+            allItems = await this.page.evaluate(scanDOM);
+
+            // If found, return
+            if (allItems.length > 0) return { success: true, data: allItems };
+
+            // If not found, check other frames
+            for (const frame of frames) {
+                try {
+                    const items = await frame.evaluate(scanDOM);
+                    if (items && items.length > 0) {
+                        return { success: true, data: items };
+                    }
+                } catch (e) { /* ignore navigation errors in frames */ }
             }
 
-            // Retry with main page evaluation if frames failed
-            const conversations = await this.page.evaluate(() => {
-                const items = [];
-                // Current
-                const currentTitle = document.querySelector('.text-quickinput-foreground.opacity-50 + div span.text-sm span')?.textContent;
-                if (currentTitle) items.push({ title: currentTitle.trim(), isCurrent: true, index: 0 });
+            // 2. If STILL no items, try Toggle Button (in main page preferably)
+            const toggled = await this.page.evaluate(async () => {
+                // Try selector suggested by user + fallback
+                const toggleBtn = document.querySelector('[data-tooltip-id="history-tooltip"]') ||
+                    document.querySelector('[data-past-conversations-toggle="true"]');
 
-                // Others
-                document.querySelectorAll('.hover\\:bg-list-hover span.text-sm span').forEach((span, i) => {
-                    items.push({ title: span.textContent.trim(), isCurrent: false, index: items.length });
-                });
-                return items;
+                if (toggleBtn) {
+                    console.log('🔄 Toggling history (found btn)...');
+                    toggleBtn.click();
+                    // Dispatch events just in case
+                    toggleBtn.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
+
+                    // Helper to wait
+                    await new Promise(r => setTimeout(r, 800));
+                    return true;
+                }
+                return false;
             });
 
-            return { success: true, data: conversations };
+            if (toggled) {
+                // Scan again after toggle
+                allItems = await this.page.evaluate(scanDOM);
+                return { success: true, data: allItems };
+            }
+
+            return { success: true, data: [] };
 
         } catch (e) {
             console.error('❌ CDP Get Conversations Error:', e.message);
@@ -917,8 +1006,9 @@ class AntigravityBridge {
                 const isIndex = typeof targetVal === 'number';
 
                 // Collect all clickable items (current + others)
-                // Current is non-clickable usually, so we focus on others for switching
-                const items = Array.from(document.querySelectorAll('.px-2.5.cursor-pointer, .hover\\:bg-list-hover'));
+                // Use safe attribute selector
+                // Note: The previous selector had a SyntaxError with :
+                const items = Array.from(document.querySelectorAll('[class*="hover:bg-list-hover"]'));
 
                 let targetEl = null;
 
@@ -1583,16 +1673,16 @@ class AntigravityBridge {
             const self = this;
             const MIN_LEN = this.MIN_RESPONSE_LENGTH;
             const PATTERNS = this.NOISE_PATTERNS;
-
+ 
             await this.page.exposeFunction('onNewMessage', (content, role = 'assistant') => {
                 // ... noise filter logic ...
             });
-
+ 
             // 2. Inject script để theo dõi DOM changes
             await this.page.evaluate((selectors) => {
                 // ... observer logic ...
             }, this.selectors);
-
+ 
             console.log('✅ DOM Observer đã được thiết lập');
         } catch (err) {
             console.log('⚠️ DOM Observer error:', err.message);
@@ -3357,7 +3447,7 @@ class AntigravityBridge {
     }
 
     /**
-
+ 
      * Ngắt kết nối
      */
     disconnect() {

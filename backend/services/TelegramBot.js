@@ -399,7 +399,7 @@ class TelegramBotService {
         }
     }
 
-    async _handleOpen(msg, match = null, directPath = null, isEdit = false) {
+    async _handleOpen(msg, match = null, directPath = null, isEdit = false, page = 0) {
         if (!this._isAuthorized(msg)) return;
 
         try {
@@ -429,6 +429,26 @@ class TelegramBotService {
             // Filter folders only
             const folders = entries.filter(e => e.isDirectory()).map(e => e.name);
 
+            // Sort: .agent first, then others
+            folders.sort((a, b) => {
+                const aDot = a.startsWith('.');
+                const bDot = b.startsWith('.');
+                if (aDot && !bDot) return -1;
+                if (!aDot && bDot) return 1;
+                return a.localeCompare(b);
+            });
+
+            // Pagination Logic
+            const ITEMS_PER_PAGE = 10;
+            const totalPages = Math.ceil(folders.length / ITEMS_PER_PAGE);
+            // Ensure page is within bounds
+            if (page < 0) page = 0;
+            if (page >= totalPages && totalPages > 0) page = totalPages - 1;
+
+            const startIdx = page * ITEMS_PER_PAGE;
+            const endIdx = startIdx + ITEMS_PER_PAGE;
+            const currentFolders = folders.slice(startIdx, endIdx);
+
             // Build UI
             const keyboard = [];
 
@@ -441,23 +461,25 @@ class TelegramBotService {
                 keyboard.push([{ text: '⬅️ .. (Lên 1 cấp)', callback_data: 'parent_dir' }]);
             }
 
-            // 3. Subfolders (limit to 10 to avoid huge lists, maybe add pagination later if needed)
-            // Sort: .agent first, then others
-            folders.sort((a, b) => {
-                if (a.startsWith('.')) return -1;
-                if (b.startsWith('.')) return 1;
-                return a.localeCompare(b);
-            });
-
-            const maxFolders = 10; // limit for now
-            for (let i = 0; i < Math.min(folders.length, maxFolders); i++) {
-                keyboard.push([{ text: `📂 ${folders[i]}`, callback_data: `dir_${folders[i]}` }]);
-            }
-            if (folders.length > maxFolders) {
-                keyboard.push([{ text: `... và ${folders.length - maxFolders} folder khác (chưa hiện)`, callback_data: 'ignore' }]);
+            // 3. Subfolders
+            for (const folder of currentFolders) {
+                keyboard.push([{ text: `📂 ${folder}`, callback_data: `dir_${folder}` }]);
             }
 
-            const text = `📂 **Duyệt File System**\n📍 Path: \`${browsePath}\``;
+            // 4. Pagination Controls
+            if (totalPages > 1) {
+                const navRow = [];
+                if (page > 0) {
+                    navRow.push({ text: '<< Trước', callback_data: `dirpage_${page - 1}` });
+                }
+                navRow.push({ text: `${page + 1}/${totalPages}`, callback_data: 'ignore' });
+                if (page < totalPages - 1) {
+                    navRow.push({ text: 'Sau >>', callback_data: `dirpage_${page + 1}` });
+                }
+                keyboard.push(navRow);
+            }
+
+            const text = `📂 **Duyệt File System**\n📍 Path: \`${browsePath}\`\n📄 Trang ${page + 1}/${totalPages || 1}`;
 
             const options = {
                 chat_id: this.chatId,
@@ -465,9 +487,30 @@ class TelegramBotService {
                 reply_markup: { inline_keyboard: keyboard }
             };
 
-            if (isEdit && msg.message) {
-                options.message_id = msg.message.message_id;
-                await this.bot.editMessageText(text, options);
+            if (isEdit) {
+                // If isEdit, we must have msg.message OR query.message
+                // Usually msg IS the message object when called from callback
+                // But _handleOpen signature expects msg to be the message object?
+                // Wait, normal calls: _handleOpen(msg) -> msg is incoming message
+                // Callback calls: _handleOpen(query.message, ...) -> msg is the message to edit
+
+                // We need message_id
+                const msgId = msg.message_id || msg.message?.message_id;
+                if (msgId) {
+                    options.message_id = msgId;
+                    try {
+                        await this.bot.editMessageText(text, options);
+                    } catch (editErr) {
+                        // Ignore "message is not modified"
+                        if (editErr.message?.includes('not modified')) return;
+
+                        // If other error (e.g. markdown), try sending new message
+                        console.error('⚠️ Edit failed, sending new message:', editErr.message);
+                        await this.sendMessage(text, { reply_markup: { inline_keyboard: keyboard }, parse_mode: 'Markdown' });
+                    }
+                } else {
+                    await this.sendMessage(text, { reply_markup: { inline_keyboard: keyboard }, parse_mode: 'Markdown' });
+                }
             } else {
                 await this.sendMessage(text, { reply_markup: { inline_keyboard: keyboard }, parse_mode: 'Markdown' });
             }
@@ -962,8 +1005,12 @@ if ($proc) {
                     }
                 }
                 // --- Open Project Callbacks ---
-                else if (action.startsWith('dir_') || action.startsWith('open_') || action === 'parent_dir') {
-                    if (action === 'parent_dir') {
+                else if (action.startsWith('dir_') || action.startsWith('open_') || action === 'parent_dir' || action.startsWith('dirpage_')) {
+                    if (action.startsWith('dirpage_')) {
+                        const page = parseInt(action.replace('dirpage_', ''));
+                        // Use currentBrowsePath implicitly by passing null
+                        await this._handleOpen(query.message, null, null, true, page);
+                    } else if (action === 'parent_dir') {
                         const parent = path.dirname(this.currentBrowsePath || 'C:\\');
                         await this._handleOpen(query.message, null, parent, true);
                     } else if (action.startsWith('dir_')) {
