@@ -29,7 +29,8 @@ class TelegramBotService {
         this.isProcessing = false;
 
         // Manual override for project root (fallback if CDP fails)
-        this.manualProjectRoot = null;
+        // Default to current working directory (where bot is running)
+        this.manualProjectRoot = process.cwd();
 
         // Load available models from env
         this.availableModels = (process.env.AVAILABLE_MODELS || '')
