@@ -27,6 +27,8 @@ const CDP_PORT = parseInt(process.env.CDP_PORT) || 9000;
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const CHAT_ID = process.env.TELEGRAM_CHAT_ID;
 
+const ANTIGRAVITY_PATH = process.env.ANTIGRAVITY_PATH;
+
 // Validate config
 if (!BOT_TOKEN || BOT_TOKEN === 'your_bot_token_here') {
     console.error('❌ TELEGRAM_BOT_TOKEN chưa được cấu hình!');
@@ -52,6 +54,7 @@ console.log(`
 ║  💬 Chat ID:   ${CHAT_ID}                                   ║
 ║  🔌 CDP Port:  ${CDP_PORT}                                        ║
 ║  📡 WS Port:   ${WS_PORT}                                        ║
+║  🚀 App Path:  ${ANTIGRAVITY_PATH ? (ANTIGRAVITY_PATH.length > 35 ? '...' + ANTIGRAVITY_PATH.slice(-32) : ANTIGRAVITY_PATH.padEnd(35)) : 'Auto-detect (via wmic)               '}║
 ╚════════════════════════════════════════════════════════════╝
 `);
 

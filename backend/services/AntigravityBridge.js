@@ -973,26 +973,72 @@ class AntigravityBridge {
                 return { success: true };
             }
 
-            // Try all frames
-            const frames = this.page.frames();
-            for (const frame of frames) {
-                executed = await frame.evaluate((p) => {
-                    // @ts-ignore
-                    if (typeof vscode !== 'undefined' && vscode.commands) {
-                        vscode.commands.executeCommand('vscode.openFolder', vscode.Uri.file(p), { forceNewWindow: false });
-                        return true;
-                    }
+            // Method 2: Try AMD require for 'vscode' or internal modules
+            try {
+                executed = await this.page.evaluate(async (p) => {
+                    try {
+                        // @ts-ignore
+                        if (typeof window.require !== 'undefined') {
+                            return new Promise((resolve) => {
+                                // @ts-ignore
+                                window.require(['vscode'], (vscode) => {
+                                    if (vscode && vscode.commands) {
+                                        vscode.commands.executeCommand('vscode.openFolder', vscode.Uri.file(p), { forceNewWindow: false });
+                                        resolve(true);
+                                    } else {
+                                        resolve(false);
+                                    }
+                                }, (err) => resolve(false));
+                            });
+                        }
+                    } catch (e) { return false; }
                     return false;
                 }, pathStr);
 
                 if (executed) {
-                    console.log(`✅ CDP: Open folder command sent (Frame: ${frame.url()})`);
+                    console.log('✅ CDP: Open folder command sent (AMD require)');
                     return { success: true };
+                }
+            } catch (e) { /* ignore AMD error */ }
+
+            // Try all frames
+            const frames = this.page.frames();
+            for (const frame of frames) {
+                try {
+                    executed = await frame.evaluate((p) => {
+                        // @ts-ignore
+                        if (typeof vscode !== 'undefined' && vscode.commands) {
+                            // @ts-ignore
+                            vscode.commands.executeCommand('vscode.openFolder', vscode.Uri.file(p), { forceNewWindow: false });
+                            return true;
+                        }
+                        return false;
+                    }, pathStr);
+
+                    if (executed) {
+                        console.log(`✅ CDP: Open folder command sent (Frame: ${frame.url()})`);
+                        return { success: true };
+                    }
+                } catch (frameErr) {
+                    // Check if frame destroyed (good sign of reload)
+                    if (frameErr.message.includes('Execution context was destroyed') || frameErr.message.includes('Target closed')) {
+                        console.log('✅ CDP: Frame destroyed (likely reloading)...');
+                        return { success: true };
+                    }
                 }
             }
 
+            console.log('⚠️ CDP: vscode.commands API not found in any frame');
             return { success: false, error: 'vscode.commands API not found in any frame' };
         } catch (e) {
+            // Check for navigation/reload errors which indicate command worked
+            if (e.message.includes('Execution context was destroyed') ||
+                e.message.includes('Target closed') ||
+                e.message.includes('Session closed')) {
+                console.log('✅ CDP: Disconnected (Window Reloading)...');
+                return { success: true };
+            }
+
             console.error('❌ CDP Open Project Error:', e.message);
             return { success: false, error: e.message };
         }

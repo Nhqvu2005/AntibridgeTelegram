@@ -5,7 +5,7 @@
  */
 
 const TelegramBot = require('node-telegram-bot-api');
-const { exec } = require('child_process');
+const { exec, spawn } = require('child_process');
 const path = require('path');
 const fs = require('fs');
 const QuotaService = require('./QuotaService');
@@ -971,18 +971,54 @@ if ($proc) {
                         const newPath = path.join(this.currentBrowsePath || 'C:\\', dirName);
                         await this._handleOpen(query.message, null, newPath, true);
                     } else if (action.startsWith('open_')) {
-                        const targetPath = action.replace('open_', ''); // This might be "current" or subfolder
-                        const finalPath = targetPath === 'current' ? (this.currentBrowsePath || 'C:\\') : path.join(this.currentBrowsePath, targetPath);
+                        const targetPath = action.replace('open_', '');
+                        // open_current means use currentBrowsePath
+                        const finalPath = targetPath === 'current' ? (this.currentBrowsePath || 'C:\\') : path.join(this.currentBrowsePath || 'C:\\', targetPath);
 
+                        console.log(`📂 User requested open: ${finalPath}`);
                         await this.bot.answerCallbackQuery(query.id, { text: '📂 Đang mở dự án...' });
-                        const result = await this.antigravityBridge.openProjectFolder(finalPath);
-                        if (result?.success) {
-                            this.manualProjectRoot = finalPath; // Auto-set manual root fallback
-                            await this.bot.sendMessage(`✅ Đã mở dự án: ${finalPath}`);
-                        } else {
-                            await this.bot.sendMessage(`❌ Lỗi mở dự án: ${result?.error}`);
+
+                        try {
+                            // Direct Native Launch (bypassing CDP as requested)
+                            this.manualProjectRoot = finalPath;
+
+                            const exePath = await this._findAntigravityExecutable();
+                            let launched = false;
+
+                            if (exePath && fs.existsSync(exePath)) {
+                                try {
+                                    // Spawn detached process
+                                    // Use -r to reuse window if possible
+                                    const subprocess = spawn(exePath, ['-r', finalPath], {
+                                        detached: true,
+                                        stdio: 'ignore',
+                                        windowsHide: false
+                                    });
+                                    subprocess.unref();
+                                    launched = true;
+                                } catch (e) {
+                                    console.error('❌ Native launch failed:', e);
+                                }
+                            }
+
+                            if (launched) {
+                                await this.bot.sendMessage(this.chatId,
+                                    `🚀 **Đang mở dự án...**\n` +
+                                    `📂 Path: \`${finalPath}\``
+                                );
+                            } else {
+                                await this.bot.sendMessage(this.chatId,
+                                    `⚠️ **Không thể mở dự án**\n` +
+                                    `- Native launch thất bại: Không tìm thấy Antigravity.exe\n\n` +
+                                    `👉 Tuy nhiên, Bot **đã chuyển context** sang:\n\`${finalPath}\``
+                                );
+                            }
+                        } catch (openErr) {
+                            console.error('❌ Open Project Error:', openErr);
+                            await this.bot.sendMessage(this.chatId, `❌ Lỗi ngoại lệ: ${openErr.message}`);
                         }
                     }
+
                     await this.bot.answerCallbackQuery(query.id);
                 }
                 // --- Workflow Callbacks ---
@@ -1331,6 +1367,38 @@ if ($proc) {
             this.bot.stopPolling();
             console.log('🤖 Telegram Bot stopped');
         }
+    }
+    /**
+     * Finds the Antigravity executable path dynamically.
+     * Tries:
+     * 1. process.env.ANTIGRAVITY_PATH
+     * 2. wmic process (running instance)
+     * 3. Default path (null/none)
+     */
+    async _findAntigravityExecutable() {
+        if (process.env.ANTIGRAVITY_PATH && fs.existsSync(process.env.ANTIGRAVITY_PATH)) {
+            return process.env.ANTIGRAVITY_PATH;
+        }
+
+        return new Promise((resolve) => {
+            exec('wmic process where "name like \'%Antigravity%\'" get executablepath', (err, stdout) => {
+                if (!err && stdout) {
+                    const lines = stdout.split('\n').map(l => l.trim()).filter(l => l && l.toLowerCase().includes('antigravity.exe'));
+                    if (lines.length > 0) {
+                        // lines[0] is usually ExecutablePath header, lines[1] is the path
+                        const path = lines.find(l => l.toLowerCase().endsWith('.exe'));
+                        if (path) {
+                            console.log(`🔍 Found Antigravity path via wmic: ${path}`);
+                            resolve(path);
+                            return;
+                        }
+                    }
+                }
+                // Fallback: Return null if not found
+                console.log('⚠️ Could not find Antigravity path via wmic.');
+                resolve(null);
+            });
+        });
     }
 }
 
