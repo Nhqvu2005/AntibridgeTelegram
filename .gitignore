@@ -10,6 +10,9 @@ node_modules/
 quota_history.json
 quota_raw_*.json
 
+# Data folder (local only)
+Data/
+
 # OS files
 Thumbs.db
 Desktop.ini
