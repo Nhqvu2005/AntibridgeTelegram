@@ -957,16 +957,41 @@ class AntigravityBridge {
 
         try {
             console.log(`📂 CDP: Opening project folder: ${pathStr}`);
-            await this.page.evaluate((p) => {
+
+            // Try main page first
+            let executed = await this.page.evaluate((p) => {
                 // @ts-ignore
-                if (typeof vscode !== 'undefined') {
-                    // forceNewWindow: false -> Open in current window (replace)
+                if (typeof vscode !== 'undefined' && vscode.commands) {
                     vscode.commands.executeCommand('vscode.openFolder', vscode.Uri.file(p), { forceNewWindow: false });
+                    return true;
                 }
+                return false;
             }, pathStr);
 
-            console.log('✅ CDP: Open folder command sent');
-            return { success: true };
+            if (executed) {
+                console.log('✅ CDP: Open folder command sent (Main Frame)');
+                return { success: true };
+            }
+
+            // Try all frames
+            const frames = this.page.frames();
+            for (const frame of frames) {
+                executed = await frame.evaluate((p) => {
+                    // @ts-ignore
+                    if (typeof vscode !== 'undefined' && vscode.commands) {
+                        vscode.commands.executeCommand('vscode.openFolder', vscode.Uri.file(p), { forceNewWindow: false });
+                        return true;
+                    }
+                    return false;
+                }, pathStr);
+
+                if (executed) {
+                    console.log(`✅ CDP: Open folder command sent (Frame: ${frame.url()})`);
+                    return { success: true };
+                }
+            }
+
+            return { success: false, error: 'vscode.commands API not found in any frame' };
         } catch (e) {
             console.error('❌ CDP Open Project Error:', e.message);
             return { success: false, error: e.message };
@@ -980,14 +1005,31 @@ class AntigravityBridge {
         if (!this.page) return null;
 
         try {
-            const rootPath = await this.page.evaluate(() => {
+            // Try main page first
+            let rootPath = await this.page.evaluate(() => {
                 // @ts-ignore
-                if (typeof vscode !== 'undefined' && vscode.workspace.workspaceFolders && vscode.workspace.workspaceFolders.length > 0) {
+                if (typeof vscode !== 'undefined' && vscode.workspace && vscode.workspace.workspaceFolders && vscode.workspace.workspaceFolders.length > 0) {
                     return vscode.workspace.workspaceFolders[0].uri.fsPath;
                 }
                 return null;
             });
-            return rootPath;
+
+            if (rootPath) return rootPath;
+
+            // Try frames
+            const frames = this.page.frames();
+            for (const frame of frames) {
+                rootPath = await frame.evaluate(() => {
+                    // @ts-ignore
+                    if (typeof vscode !== 'undefined' && vscode.workspace && vscode.workspace.workspaceFolders && vscode.workspace.workspaceFolders.length > 0) {
+                        return vscode.workspace.workspaceFolders[0].uri.fsPath;
+                    }
+                    return null;
+                });
+                if (rootPath) return rootPath;
+            }
+
+            return null;
         } catch (e) {
             return null;
         }
