@@ -19,6 +19,9 @@
 | ⏱️ **Smart Polling** | Tự động điều chỉnh tốc độ polling (nhanh 3s → chậm 10s, tối đa 15 phút) |
 | 🤖 **Đổi Model** | Chuyển đổi model AI ngay trên Telegram với `/model` |
 | 📸 **Screenshot** | Chụp ảnh Antigravity IDE gửi về Telegram |
+| 🗂️ **Conversations** | Chuyển đổi qua lại giữa các cuộc trò chuyện đang mở với `/conversations` |
+| 📂 **Open Project** | Duyệt file system và mở dự án khác từ xa với `/open` |
+| ⚡ **Skills** | Chạy các workflow/skill từ folder `.agent/workflows` với `/skills` |
 
 ---
 
@@ -79,7 +82,11 @@ npm run telegram
 | `/reconnect` | 🔄 Kết nối lại CDP |
 | `/clear` | 🗑️ Xóa lịch sử chat |
 | `/accept` | ✅ Accept action hiện tại |
+| `/accept` | ✅ Accept action hiện tại |
 | `/reject` | ❌ Reject action hiện tại |
+| `/conversations` | 🗂️ Danh sách và chuyển đổi cuộc trò chuyện |
+| `/open` | 📂 Duyệt file và mở dự án (Folder) |
+| `/skills` | ⚡ Danh sách và chạy Skill (.md workflow) |
 
 ---
 
