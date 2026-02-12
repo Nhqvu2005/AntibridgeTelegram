@@ -86,7 +86,8 @@ npm run telegram
 | `/reject` | ❌ Reject action hiện tại |
 | `/conversations` | 🗂️ Danh sách và chuyển đổi cuộc trò chuyện |
 | `/open` | 📂 Duyệt file và mở dự án (Folder) |
-| `/skills` | ⚡ Danh sách và chạy Skill (.md workflow) |
+| `/workflows` | ⚡ Chạy Workflow (file .md trong .agent/workflows) |
+| `/skills` | 🛠️ Chạy Skill (folder trong .agent/skills) |
 
 ---
 

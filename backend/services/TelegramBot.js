@@ -68,7 +68,8 @@ class TelegramBotService {
             { command: 'history_quota', description: '📜 Lịch sử thay đổi quota' },
             { command: 'conversations', description: '🗂️ Chuyển cuộc trò chuyện' },
             { command: 'open', description: '📂 Mở dự án khác' },
-            { command: 'skills', description: '⚡ Chạy Skill/Workflow' },
+            { command: 'workflows', description: '⚡ Chạy Workflow (.agent/workflows)' },
+            { command: 'skills', description: '🛠️ Chạy Skill (.agent/skills)' },
         ]);
 
         this.bot.onText(/\/start/, (msg) => this._handleStart(msg));
@@ -84,6 +85,7 @@ class TelegramBotService {
         this.bot.onText(/\/history_quota/, (msg) => this._handleHistoryQuota(msg));
         this.bot.onText(/\/conversations/, (msg) => this._handleConversations(msg));
         this.bot.onText(/\/open(.*)/, (msg, match) => this._handleOpen(msg, match));
+        this.bot.onText(/\/workflows/, (msg) => this._handleWorkflows(msg));
         this.bot.onText(/\/skills/, (msg) => this._handleSkills(msg));
     }
 
@@ -470,11 +472,11 @@ class TelegramBotService {
         }
     }
 
-    async _handleSkills(msg) {
+    async _handleWorkflows(msg) {
         if (!this._isAuthorized(msg)) return;
 
         try {
-            await this.sendMessage('⚡ Đang quét skill...');
+            await this.sendMessage('⚡ Đang quét workflows...');
 
             // 1. Get current project root
             const rootPath = await this.antigravityBridge.getCurrentProjectRoot();
@@ -486,34 +488,36 @@ class TelegramBotService {
             // 2. Check .agent/workflows
             const workflowsPath = path.join(rootPath, '.agent', 'workflows');
             if (!fs.existsSync(workflowsPath)) {
-                await this.sendMessage(`⚠️ Không tìm thấy folder skill: \`${workflowsPath}\``, { parse_mode: 'Markdown' });
+                await this.sendMessage(`⚠️ Không tìm thấy folder workflows: \`${workflowsPath}\``, { parse_mode: 'Markdown' });
                 return;
             }
 
             // 3. List .md files
-            const files = fs.readdirSync(workflowsPath).filter(f => f.endsWith('.md'));
+            const entries = fs.readdirSync(workflowsPath, { withFileTypes: true });
+            const files = entries.filter(e => e.isFile() && e.name.endsWith('.md')).map(e => e.name);
+
             if (files.length === 0) {
-                await this.sendMessage('📭 Không có file skill (.md) nào trong .agent/workflows');
+                await this.sendMessage('📭 Không có file workflow (.md) nào.');
                 return;
             }
 
             // 4. Build keyboard
             const keyboard = [];
             for (const file of files) {
-                keyboard.push([{ text: `⚡ ${file}`, callback_data: `skill_${file}` }]);
+                keyboard.push([{ text: `⚡ ${file}`, callback_data: `workflow_${file}` }]);
             }
 
-            await this.sendMessage(`⚡ **Danh sách Skill**\n📍 \`${workflowsPath}\``, {
+            await this.sendMessage(`⚡ **Danh sách Workflow**\n📍 \`${workflowsPath}\``, {
                 parse_mode: 'Markdown',
                 reply_markup: { inline_keyboard: keyboard }
             });
 
         } catch (e) {
-            await this.sendMessage(`❌ Skill error: ${e.message}`);
+            await this.sendMessage(`❌ Workflow error: ${e.message}`);
         }
     }
 
-    async _executeSkill(filename, queryId) {
+    async _executeWorkflow(filename, queryId) {
         try {
             const rootPath = await this.antigravityBridge.getCurrentProjectRoot();
             if (!rootPath) throw new Error('Root path not found');
@@ -535,6 +539,114 @@ class TelegramBotService {
                 await this.sendMessage('❌ Gửi skill thất bại.');
             }
 
+        } catch (e) {
+            await this.sendMessage(`❌ Workflow error: ${e.message}`);
+        }
+    }
+
+    async _handleSkills(msg) {
+        if (!this._isAuthorized(msg)) return;
+
+        try {
+            await this.sendMessage('🛠️ Đang quét skills...');
+
+            const rootPath = await this.antigravityBridge.getCurrentProjectRoot();
+            if (!rootPath) {
+                await this.sendMessage('❌ Không xác định được Project Root.');
+                return;
+            }
+
+            const skillsPath = path.join(rootPath, '.agent', 'skills');
+            if (!fs.existsSync(skillsPath)) {
+                await this.sendMessage(`⚠️ Không tìm thấy folder skills: \`${skillsPath}\``, { parse_mode: 'Markdown' });
+                return;
+            }
+
+            // List Directories
+            const entries = fs.readdirSync(skillsPath, { withFileTypes: true });
+            const folders = entries.filter(e => e.isDirectory()).map(e => e.name);
+
+            if (folders.length === 0) {
+                await this.sendMessage('📭 Không có skill folder nào.');
+                return;
+            }
+
+            // Build Folder Keyboard
+            const keyboard = [];
+            for (const folder of folders) {
+                keyboard.push([{ text: `📂 ${folder}`, callback_data: `skill_folder_${folder}` }]);
+            }
+
+            await this.sendMessage(`🛠️ **Danh sách Skill Folder**\n📍 \`${skillsPath}\``, {
+                parse_mode: 'Markdown',
+                reply_markup: { inline_keyboard: keyboard }
+            });
+
+        } catch (e) {
+            await this.sendMessage(`❌ Skill scanner error: ${e.message}`);
+        }
+    }
+
+    async _handleSkillFolder(msg, folderName, isEdit = false) {
+        try {
+            const rootPath = await this.antigravityBridge.getCurrentProjectRoot();
+            const folderPath = path.join(rootPath, '.agent', 'skills', folderName);
+
+            // List .md files in skill folder
+            const entries = fs.readdirSync(folderPath, { withFileTypes: true });
+            const files = entries.filter(e => e.isFile() && e.name.endsWith('.md')).map(e => e.name);
+
+            if (files.length === 0) {
+                await this.sendMessage(`📭 Folder \`${folderName}\` không có file .md nào.`);
+                return;
+            }
+
+            // Build File Keyboard
+            const keyboard = [];
+            for (const file of files) {
+                keyboard.push([{ text: `📜 ${file}`, callback_data: `skill_file_${folderName}|${file}` }]);
+            }
+
+            const text = `🛠️ **Skill: ${folderName}**\nChọn file để chạy:`;
+
+            if (isEdit && msg.message) {
+                await this.bot.editMessageText(text, {
+                    chat_id: this.chatId,
+                    message_id: msg.message.message_id,
+                    parse_mode: 'Markdown',
+                    reply_markup: { inline_keyboard: keyboard }
+                });
+            } else {
+                await this.sendMessage(text, {
+                    parse_mode: 'Markdown',
+                    reply_markup: { inline_keyboard: keyboard }
+                });
+            }
+
+        } catch (e) {
+            await this.sendMessage(`❌ Skill folder error: ${e.message}`);
+        }
+    }
+
+    async _executeSkillFile(folder, filename, queryId) {
+        try {
+            const rootPath = await this.antigravityBridge.getCurrentProjectRoot();
+            const filePath = path.join(rootPath, '.agent', 'skills', folder, filename);
+
+            if (!fs.existsSync(filePath)) throw new Error('Skill file not found');
+
+            const content = fs.readFileSync(filePath, 'utf-8');
+
+            await this.bot.answerCallbackQuery(queryId, { text: `🚀 Chạy ${folder}/${filename}...` });
+            await this.sendMessage(`🚀 **Executing Skill: ${folder}/${filename}**...`);
+
+            const result = await this.antigravityBridge.injectTextToChat(content);
+            if (result?.success) {
+                await this.sendMessage('✅ Đã gửi skill vào chat!');
+                await this._pollForResponse('');
+            } else {
+                await this.sendMessage('❌ Gửi thất bại.');
+            }
         } catch (e) {
             await this.sendMessage(`❌ Execute skill error: ${e.message}`);
         }
@@ -867,10 +979,23 @@ if ($proc) {
                     }
                     await this.bot.answerCallbackQuery(query.id);
                 }
-                // --- Skill/Workflow Callbacks ---
-                else if (action.startsWith('skill_')) {
-                    const skillName = action.replace('skill_', '');
-                    await this._executeSkill(skillName, query.id);
+                // --- Workflow Callbacks ---
+                else if (action.startsWith('workflow_')) {
+                    const filename = action.replace('workflow_', '');
+                    await this._executeWorkflow(filename, query.id);
+                }
+                // --- Skill Callbacks ---
+                else if (action.startsWith('skill_folder_')) {
+                    const folderName = action.replace('skill_folder_', '');
+                    await this._handleSkillFolder(query.message, folderName, true); // list files
+                    await this.bot.answerCallbackQuery(query.id);
+                }
+                else if (action.startsWith('skill_file_')) {
+                    // format: skill_file_FOLDER|FILENAME
+                    const [folder, filename] = action.replace('skill_file_', '').split('|');
+                    if (folder && filename) {
+                        await this._executeSkillFile(folder, filename, query.id);
+                    }
                 }
                 else {
                     await this.bot.answerCallbackQuery(query.id);
