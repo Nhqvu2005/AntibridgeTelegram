@@ -1008,29 +1008,51 @@ class AntigravityBridge {
             // Try main page first
             let rootPath = await this.page.evaluate(() => {
                 // @ts-ignore
-                if (typeof vscode !== 'undefined' && vscode.workspace && vscode.workspace.workspaceFolders && vscode.workspace.workspaceFolders.length > 0) {
-                    return vscode.workspace.workspaceFolders[0].uri.fsPath;
-                }
+                try {
+                    if (typeof vscode !== 'undefined') {
+                        if (vscode.workspace && vscode.workspace.workspaceFolders && vscode.workspace.workspaceFolders.length > 0) {
+                            return vscode.workspace.workspaceFolders[0].uri.fsPath;
+                        }
+                        // vscode exists but no workspace
+                        return 'NO_WORKSPACE';
+                    }
+                } catch (e) { return 'ERROR_' + e.message; }
                 return null;
             });
 
-            if (rootPath) return rootPath;
+            if (rootPath === 'NO_WORKSPACE') {
+                console.log('⚠️ Main Frame: vscode API exists but no workspace open.');
+            } else if (rootPath && !rootPath.startsWith('ERROR_') && rootPath !== 'NO_WORKSPACE') {
+                // console.log('✅ Found root in Main Frame:', rootPath);
+                return rootPath;
+            }
 
             // Try frames
             const frames = this.page.frames();
             for (const frame of frames) {
                 rootPath = await frame.evaluate(() => {
                     // @ts-ignore
-                    if (typeof vscode !== 'undefined' && vscode.workspace && vscode.workspace.workspaceFolders && vscode.workspace.workspaceFolders.length > 0) {
-                        return vscode.workspace.workspaceFolders[0].uri.fsPath;
-                    }
+                    try {
+                        if (typeof vscode !== 'undefined') {
+                            if (vscode.workspace && vscode.workspace.workspaceFolders && vscode.workspace.workspaceFolders.length > 0) {
+                                return vscode.workspace.workspaceFolders[0].uri.fsPath;
+                            }
+                            return 'NO_WORKSPACE';
+                        }
+                    } catch (e) { return 'ERROR_' + e.message; }
                     return null;
                 });
-                if (rootPath) return rootPath;
+
+                if (rootPath && !rootPath.startsWith('ERROR_') && rootPath !== 'NO_WORKSPACE') {
+                    // console.log(`✅ Found root in Frame ${frame.url()}: ${rootPath}`);
+                    return rootPath;
+                }
             }
 
+            console.error('❌ getCurrentProjectRoot: Failed to find project root in any frame (vscode API missing or no workspace).');
             return null;
         } catch (e) {
+            console.error('❌ getCurrentProjectRoot exception:', e.message);
             return null;
         }
     }
