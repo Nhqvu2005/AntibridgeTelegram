@@ -805,6 +805,194 @@ class AntigravityBridge {
         }
     }
 
+    // ============================================================
+    // 🗂️ CONVERSATION & PROJECT MANAGEMENT (v3.1.0)
+    // ============================================================
+
+    /**
+     * 📂 Lấy danh sách cuộc trò chuyện (Conversations)
+     * Parse từ Sidebar History List
+     */
+    async getConversations() {
+        if (!this.page) return { success: false, error: 'Not connected' };
+
+        try {
+            console.log('📂 CDP: Getting conversation list...');
+
+            // 1. Ensure history list is open
+            await this.page.evaluate(() => {
+                const historyBtn = document.querySelector('a[data-tooltip-id="history-tooltip"], [aria-label*="History"], .lucide-history')?.closest('a, button');
+                if (historyBtn) {
+                    // Check if list is already visible (check for "Current" label or specific list items)
+                    const listVisible = document.querySelector('.text-quickinput-foreground.text-xs.opacity-50');
+                    if (!listVisible) historyBtn.click();
+                }
+            });
+
+            // Wait for list animation
+            await new Promise(r => setTimeout(r, 500));
+
+            const frames = this.page.frames();
+            for (const frame of frames) {
+                const conversations = await frame.evaluate(() => {
+                    const items = [];
+
+                    // 1. Get Current Conversation
+                    const currentContainer = document.querySelector('.text-quickinput-foreground.text-xs.opacity-50')?.parentElement;
+                    if (currentContainer) {
+                        const titleEl = currentContainer.querySelector('span.text-sm.truncate span');
+                        const timeEl = currentContainer.querySelector('span.text-xs.opacity-50.ml-4');
+                        if (titleEl) {
+                            items.push({
+                                title: titleEl.textContent.trim(),
+                                time: timeEl?.textContent.trim() || '',
+                                isCurrent: true,
+                                index: 0
+                            });
+                        }
+                    }
+
+                    // 2. Get Other Conversations
+                    const others = document.querySelectorAll('.px-2.5.cursor-pointer.flex.items-center.justify-between.hover\\:bg-list-hover');
+                    others.forEach((el, idx) => {
+                        const titleEl = el.querySelector('span.text-sm.truncate span');
+                        const timeEl = el.querySelector('span.text-xs.opacity-50.ml-4');
+                        if (titleEl) {
+                            items.push({
+                                title: titleEl.textContent.trim(),
+                                time: timeEl?.textContent.trim() || '',
+                                isCurrent: false,
+                                index: items.length // continue index
+                            });
+                        }
+                    });
+
+                    return items;
+                });
+
+                if (conversations && conversations.length > 0) {
+                    // Cache the frame context? No need, just return data
+                    return { success: true, daa: conversations }; // Typo fixed below
+                }
+            }
+
+            // Retry with main page evaluation if frames failed
+            const conversations = await this.page.evaluate(() => {
+                const items = [];
+                // Current
+                const currentTitle = document.querySelector('.text-quickinput-foreground.opacity-50 + div span.text-sm span')?.textContent;
+                if (currentTitle) items.push({ title: currentTitle.trim(), isCurrent: true, index: 0 });
+
+                // Others
+                document.querySelectorAll('.hover\\:bg-list-hover span.text-sm span').forEach((span, i) => {
+                    items.push({ title: span.textContent.trim(), isCurrent: false, index: items.length });
+                });
+                return items;
+            });
+
+            return { success: true, data: conversations };
+
+        } catch (e) {
+            console.error('❌ CDP Get Conversations Error:', e.message);
+            return { success: false, error: e.message };
+        }
+    }
+
+    /**
+     * 🔄 Chuyển cuộc trò chuyện
+     * @param {string|number} target - Title hoặc Index của conversation
+     */
+    async switchConversation(target) {
+        if (!this.page) return { success: false, error: 'Not connected' };
+
+        try {
+            console.log(`🔄 CDP: Switching conversation to "${target}"...`);
+
+            // Ensure list is open first
+            await this.getConversations();
+
+            // Click item
+            const found = await this.page.evaluate((targetVal) => {
+                // Determine mechanism: by index or text
+                const isIndex = typeof targetVal === 'number';
+
+                // Collect all clickable items (current + others)
+                // Current is non-clickable usually, so we focus on others for switching
+                const items = Array.from(document.querySelectorAll('.px-2.5.cursor-pointer, .hover\\:bg-list-hover'));
+
+                let targetEl = null;
+
+                if (isIndex) {
+                    if (targetVal >= 0 && targetVal < items.length) targetEl = items[targetVal];
+                } else {
+                    targetEl = items.find(el => el.textContent.includes(targetVal));
+                }
+
+                if (targetEl) {
+                    targetEl.click();
+                    return true;
+                }
+                return false;
+            }, target);
+
+            if (found) {
+                console.log('✅ CDP: Switched conversation!');
+                return { success: true };
+            } else {
+                return { success: false, error: 'Conversation not found' };
+            }
+
+        } catch (e) {
+            console.error('❌ CDP Switch Conversation Error:', e.message);
+            return { success: false, error: e.message };
+        }
+    }
+
+    /**
+     * 📂 Mở Project Folder (VS Code Command)
+     * @param {string} pathStr - Absolute path to folder
+     */
+    async openProjectFolder(pathStr) {
+        if (!this.page) return { success: false, error: 'Not connected' };
+
+        try {
+            console.log(`📂 CDP: Opening project folder: ${pathStr}`);
+            await this.page.evaluate((p) => {
+                // @ts-ignore
+                if (typeof vscode !== 'undefined') {
+                    // forceNewWindow: false -> Open in current window (replace)
+                    vscode.commands.executeCommand('vscode.openFolder', vscode.Uri.file(p), { forceNewWindow: false });
+                }
+            }, pathStr);
+
+            console.log('✅ CDP: Open folder command sent');
+            return { success: true };
+        } catch (e) {
+            console.error('❌ CDP Open Project Error:', e.message);
+            return { success: false, error: e.message };
+        }
+    }
+
+    /**
+     * 📍 Lấy đường dẫn Project hiện tại
+     */
+    async getCurrentProjectRoot() {
+        if (!this.page) return null;
+
+        try {
+            const rootPath = await this.page.evaluate(() => {
+                // @ts-ignore
+                if (typeof vscode !== 'undefined' && vscode.workspace.workspaceFolders && vscode.workspace.workspaceFolders.length > 0) {
+                    return vscode.workspace.workspaceFolders[0].uri.fsPath;
+                }
+                return null;
+            });
+            return rootPath;
+        } catch (e) {
+            return null;
+        }
+    }
+
     /**
      * 🎯 Mở Model Picker
      * Sử dụng Antigravity command: workbench.action.chat.openModelPicker

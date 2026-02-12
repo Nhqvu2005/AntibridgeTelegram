@@ -66,6 +66,9 @@ class TelegramBotService {
             { command: 'clear', description: '🗑️ Xóa chat history' },
             { command: 'quota', description: '📊 Xem quota Antigravity' },
             { command: 'history_quota', description: '📜 Lịch sử thay đổi quota' },
+            { command: 'conversations', description: '🗂️ Chuyển cuộc trò chuyện' },
+            { command: 'open', description: '📂 Mở dự án khác' },
+            { command: 'skills', description: '⚡ Chạy Skill/Workflow' },
         ]);
 
         this.bot.onText(/\/start/, (msg) => this._handleStart(msg));
@@ -79,6 +82,9 @@ class TelegramBotService {
         this.bot.onText(/\/clear/, (msg) => this._handleClear(msg));
         this.bot.onText(/\/quota/, (msg) => this._handleQuota(msg));
         this.bot.onText(/\/history_quota/, (msg) => this._handleHistoryQuota(msg));
+        this.bot.onText(/\/conversations/, (msg) => this._handleConversations(msg));
+        this.bot.onText(/\/open(.*)/, (msg, match) => this._handleOpen(msg, match));
+        this.bot.onText(/\/skills/, (msg) => this._handleSkills(msg));
     }
 
     _isAuthorized(msg) {
@@ -315,6 +321,222 @@ class TelegramBotService {
             await this.sendMessage(formatted);
         } catch (e) {
             await this.sendMessage(`❌ History error: ${e.message}`);
+        }
+    }
+
+    // ==========================================
+    // 🗂️ NEW FEATURES: Conversations, Open, Skills
+    // ==========================================
+
+    async _handleConversations(msg, page = 0, isEdit = false) {
+        if (!this._isAuthorized(msg)) return;
+
+        try {
+            if (!isEdit) await this.sendMessage('🔄 Đang tải danh sách...');
+
+            const result = await this.antigravityBridge.getConversations();
+            if (!result?.success || !result.data) {
+                await this.sendMessage(`❌ Lỗi: ${result?.error || 'Không lấy được danh sách'}`);
+                return;
+            }
+
+            const convs = result.data;
+            if (convs.length === 0) {
+                await this.sendMessage('📭 Không có cuộc trò chuyện nào.');
+                return;
+            }
+
+            // Pagination: 5 items per page
+            const ITEMS_PER_PAGE = 5;
+            const totalPages = Math.ceil(convs.length / ITEMS_PER_PAGE);
+            if (page < 0) page = 0;
+            if (page >= totalPages) page = totalPages - 1;
+
+            const startIdx = page * ITEMS_PER_PAGE;
+            const endIdx = Math.min(startIdx + ITEMS_PER_PAGE, convs.length);
+            const pageItems = convs.slice(startIdx, endIdx);
+
+            const keyboard = [];
+
+            // Build list items
+            for (const item of pageItems) {
+                const marker = item.isCurrent ? '✅ ' : '';
+                const btnText = `${marker}${item.title} ${item.time ? `(${item.time})` : ''}`.trim();
+                keyboard.push([{ text: btnText, callback_data: `conv_${item.index}` }]);
+            }
+
+            // Navigation buttons
+            const navRow = [];
+            if (page > 0) navRow.push({ text: '⬅️ Trước', callback_data: `conv_page_${page - 1}` });
+            if (page < totalPages - 1) navRow.push({ text: 'Sau ➡️', callback_data: `conv_page_${page + 1}` });
+            if (navRow.length > 0) keyboard.push(navRow);
+
+            const text = `🗂️ **Danh sách hội thoại** (Trang ${page + 1}/${totalPages})`;
+
+            if (isEdit) {
+                await this.bot.editMessageText(text, {
+                    chat_id: this.chatId,
+                    message_id: msg.message.message_id, // For callback queries, message is inside msg
+                    parse_mode: 'Markdown',
+                    reply_markup: { inline_keyboard: keyboard }
+                });
+            } else {
+                await this.sendMessage(text, {
+                    parse_mode: 'Markdown',
+                    reply_markup: { inline_keyboard: keyboard }
+                });
+            }
+
+        } catch (e) {
+            await this.sendMessage(`❌ Conversations error: ${e.message}`);
+        }
+    }
+
+    async _handleOpen(msg, match = null, directPath = null, isEdit = false) {
+        if (!this._isAuthorized(msg)) return;
+
+        try {
+            // Determine path to browse
+            let browsePath = directPath;
+            if (!browsePath) {
+                if (match && match[1] && match[1].trim()) {
+                    browsePath = match[1].trim();
+                } else {
+                    browsePath = this.currentBrowsePath || process.cwd();
+                }
+            }
+
+            // Normalize
+            browsePath = path.resolve(browsePath);
+            this.currentBrowsePath = browsePath; // save state
+
+            // Read directory
+            let entries = [];
+            try {
+                entries = fs.readdirSync(browsePath, { withFileTypes: true });
+            } catch (e) {
+                await this.sendMessage(`❌ Không đọc được folder: ${browsePath}\n${e.message}`);
+                return;
+            }
+
+            // Filter folders only
+            const folders = entries.filter(e => e.isDirectory()).map(e => e.name);
+
+            // Build UI
+            const keyboard = [];
+
+            // 1. Open Current Button
+            keyboard.push([{ text: `✅ Mở Project này: ${path.basename(browsePath)}`, callback_data: `open_current` }]);
+
+            // 2. Parent Directory
+            const parent = path.dirname(browsePath);
+            if (parent !== browsePath) {
+                keyboard.push([{ text: '⬅️ .. (Lên 1 cấp)', callback_data: 'parent_dir' }]);
+            }
+
+            // 3. Subfolders (limit to 10 to avoid huge lists, maybe add pagination later if needed)
+            // Sort: .agent first, then others
+            folders.sort((a, b) => {
+                if (a.startsWith('.')) return -1;
+                if (b.startsWith('.')) return 1;
+                return a.localeCompare(b);
+            });
+
+            const maxFolders = 10; // limit for now
+            for (let i = 0; i < Math.min(folders.length, maxFolders); i++) {
+                keyboard.push([{ text: `📂 ${folders[i]}`, callback_data: `dir_${folders[i]}` }]);
+            }
+            if (folders.length > maxFolders) {
+                keyboard.push([{ text: `... và ${folders.length - maxFolders} folder khác (chưa hiện)`, callback_data: 'ignore' }]);
+            }
+
+            const text = `📂 **Duyệt File System**\n📍 Path: \`${browsePath}\``;
+
+            const options = {
+                chat_id: this.chatId,
+                parse_mode: 'Markdown',
+                reply_markup: { inline_keyboard: keyboard }
+            };
+
+            if (isEdit && msg.message) {
+                options.message_id = msg.message.message_id;
+                await this.bot.editMessageText(text, options);
+            } else {
+                await this.sendMessage(text, { reply_markup: { inline_keyboard: keyboard }, parse_mode: 'Markdown' });
+            }
+
+        } catch (e) {
+            await this.sendMessage(`❌ Open error: ${e.message}`);
+        }
+    }
+
+    async _handleSkills(msg) {
+        if (!this._isAuthorized(msg)) return;
+
+        try {
+            await this.sendMessage('⚡ Đang quét skill...');
+
+            // 1. Get current project root
+            const rootPath = await this.antigravityBridge.getCurrentProjectRoot();
+            if (!rootPath) {
+                await this.sendMessage('❌ Không xác định được Project Root trên Antigravity (có thể chưa mở folder nào)');
+                return;
+            }
+
+            // 2. Check .agent/workflows
+            const workflowsPath = path.join(rootPath, '.agent', 'workflows');
+            if (!fs.existsSync(workflowsPath)) {
+                await this.sendMessage(`⚠️ Không tìm thấy folder skill: \`${workflowsPath}\``, { parse_mode: 'Markdown' });
+                return;
+            }
+
+            // 3. List .md files
+            const files = fs.readdirSync(workflowsPath).filter(f => f.endsWith('.md'));
+            if (files.length === 0) {
+                await this.sendMessage('📭 Không có file skill (.md) nào trong .agent/workflows');
+                return;
+            }
+
+            // 4. Build keyboard
+            const keyboard = [];
+            for (const file of files) {
+                keyboard.push([{ text: `⚡ ${file}`, callback_data: `skill_${file}` }]);
+            }
+
+            await this.sendMessage(`⚡ **Danh sách Skill**\n📍 \`${workflowsPath}\``, {
+                parse_mode: 'Markdown',
+                reply_markup: { inline_keyboard: keyboard }
+            });
+
+        } catch (e) {
+            await this.sendMessage(`❌ Skill error: ${e.message}`);
+        }
+    }
+
+    async _executeSkill(filename, queryId) {
+        try {
+            const rootPath = await this.antigravityBridge.getCurrentProjectRoot();
+            if (!rootPath) throw new Error('Root path not found');
+
+            const filePath = path.join(rootPath, '.agent', 'workflows', filename);
+            if (!fs.existsSync(filePath)) throw new Error('Skill file not found');
+
+            const content = fs.readFileSync(filePath, 'utf-8');
+
+            await this.bot.answerCallbackQuery(queryId, { text: `🚀 Đang chạy skill: ${filename}` });
+            await this.sendMessage(`🚀 **Executing Skill: ${filename}**...`);
+
+            // Inject to chat
+            const result = await this.antigravityBridge.injectTextToChat(content);
+            if (result?.success) {
+                await this.sendMessage('✅ Đã gửi skill vào chat! Đang đợi AI xử lý...');
+                await this._pollForResponse(''); // Start polling
+            } else {
+                await this.sendMessage('❌ Gửi skill thất bại.');
+            }
+
+        } catch (e) {
+            await this.sendMessage(`❌ Execute skill error: ${e.message}`);
         }
     }
 
@@ -601,7 +823,56 @@ if ($proc) {
                     } else {
                         await this.bot.answerCallbackQuery(query.id, { text: '❌ Model không hợp lệ' });
                     }
-                } else {
+                }
+                // --- Conversation Callbacks ---
+                else if (action.startsWith('conv_')) {
+                    const target = action.replace('conv_', ''); // could be index or title? better index
+                    // If page navigation
+                    if (target.startsWith('page_')) {
+                        const page = parseInt(target.replace('page_', ''));
+                        await this._handleConversations(query.message, page, true); // edit mode
+                        await this.bot.answerCallbackQuery(query.id);
+                    } else {
+                        // Switch conversation
+                        await this.bot.answerCallbackQuery(query.id, { text: '🔄 Đang chuyển...' });
+                        const idx = parseInt(target);
+                        const result = await this.antigravityBridge.switchConversation(idx);
+                        if (result?.success) {
+                            await this.bot.sendMessage(`✅ Đã chuyển đổi cuộc trò chuyện!`);
+                        } else {
+                            await this.bot.sendMessage(`❌ Không thể chuyển: ${result?.error}`);
+                        }
+                    }
+                }
+                // --- Open Project Callbacks ---
+                else if (action.startsWith('dir_') || action.startsWith('open_') || action === 'parent_dir') {
+                    if (action === 'parent_dir') {
+                        const parent = path.dirname(this.currentBrowsePath || 'C:\\');
+                        await this._handleOpen(query.message, null, parent, true);
+                    } else if (action.startsWith('dir_')) {
+                        const dirName = action.replace('dir_', '');
+                        const newPath = path.join(this.currentBrowsePath || 'C:\\', dirName);
+                        await this._handleOpen(query.message, null, newPath, true);
+                    } else if (action.startsWith('open_')) {
+                        const targetPath = action.replace('open_', ''); // This might be "current" or subfolder
+                        const finalPath = targetPath === 'current' ? (this.currentBrowsePath || 'C:\\') : path.join(this.currentBrowsePath, targetPath);
+
+                        await this.bot.answerCallbackQuery(query.id, { text: '📂 Đang mở dự án...' });
+                        const result = await this.antigravityBridge.openProjectFolder(finalPath);
+                        if (result?.success) {
+                            await this.bot.sendMessage(`✅ Đã mở dự án: ${finalPath}`);
+                        } else {
+                            await this.bot.sendMessage(`❌ Lỗi mở dự án: ${result?.error}`);
+                        }
+                    }
+                    await this.bot.answerCallbackQuery(query.id);
+                }
+                // --- Skill/Workflow Callbacks ---
+                else if (action.startsWith('skill_')) {
+                    const skillName = action.replace('skill_', '');
+                    await this._executeSkill(skillName, query.id);
+                }
+                else {
                     await this.bot.answerCallbackQuery(query.id);
                 }
             } catch (e) {
