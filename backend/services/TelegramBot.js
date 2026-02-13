@@ -75,6 +75,7 @@ class TelegramBotService {
             { command: 'workflows', description: '⚡ Chạy Workflow (.agent/workflows)' },
             { command: 'skills', description: '🛠️ Chạy Skill (.agent/skills)' },
             { command: 'endtask', description: '🔴 Tắt Antigravity' },
+            { command: 'restart', description: '🔄 Restart bot (load code mới)' },
         ]);
 
         this.bot.onText(/\/start/, (msg) => this._handleStart(msg));
@@ -94,6 +95,7 @@ class TelegramBotService {
         this.bot.onText(/\/workflows/, (msg) => this._handleWorkflows(msg));
         this.bot.onText(/\/skills/, (msg) => this._handleSkills(msg));
         this.bot.onText(/\/endtask/, (msg) => this._handleEndTask(msg));
+        this.bot.onText(/\/restart/, (msg) => this._handleRestart(msg));
     }
 
     _isAuthorized(msg) {
@@ -357,6 +359,23 @@ class TelegramBotService {
         } catch (e) {
             await this.sendMessage(`❌ EndTask error: ${e.message}`);
         }
+    }
+
+    async _handleRestart(msg) {
+        if (!this._isAuthorized(msg)) return;
+
+        await this.sendMessage(
+            '🔄 **Restarting bot...**\n\n' +
+            '⏳ Bot sẽ tự khởi động lại trong vài giây.\n' +
+            '📦 Auto `git pull` để lấy code mới nhất.'
+        );
+
+        // Give time for message to send
+        await new Promise(r => setTimeout(r, 1000));
+
+        // Exit process — START_TELEGRAM.bat loop will restart it
+        console.log('🔄 Restart requested via Telegram. Exiting...');
+        process.exit(0);
     }
 
     // ==========================================
