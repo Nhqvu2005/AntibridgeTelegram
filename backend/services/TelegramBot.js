@@ -397,7 +397,9 @@ class TelegramBotService {
             for (const item of pageItems) {
                 const marker = item.isCurrent ? '✅ ' : '';
                 const btnText = `${marker}${item.title} ${item.time ? `(${item.time})` : ''}`.trim();
-                keyboard.push([{ text: btnText, callback_data: `conv_${item.index}` }]);
+                // Use title for matching (truncate to fit Telegram's 64-byte callback_data limit)
+                const cbTitle = item.title.substring(0, 58);
+                keyboard.push([{ text: btnText, callback_data: `conv_${cbTitle}` }]);
             }
 
             // Navigation buttons
@@ -1021,10 +1023,9 @@ if ($proc) {
                         await this._handleConversations(query.message, page, true); // edit mode
                         await this.bot.answerCallbackQuery(query.id);
                     } else {
-                        // Switch conversation
+                        // Switch conversation by title
                         await this.bot.answerCallbackQuery(query.id, { text: '🔄 Đang chuyển...' });
-                        const idx = parseInt(target);
-                        const result = await this.antigravityBridge.switchConversation(idx);
+                        const result = await this.antigravityBridge.switchConversation(target);
                         if (result?.success) {
                             await this.bot.sendMessage(`✅ Đã chuyển đổi cuộc trò chuyện!`);
                         } else {
