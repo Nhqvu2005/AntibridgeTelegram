@@ -1,108 +1,129 @@
 # 🌉 AntiBridge - Antigravity Telegram Remote
 
-> Điều khiển Antigravity IDE từ xa qua Telegram — Chat AI, giám sát quota, và nhiều hơn thế.
+> Control Antigravity IDE remotely via Telegram — Chat with AI, monitor quotas, manage projects, and more.
 
-[English Version](README_EN.md)
+[Phiên bản Tiếng Việt](README_VI.md)
 
 ---
 
-## ✨ Tính Năng
+## ✨ Features
 
-| Tính năng | Mô tả |
-|-----------|-------|
-| 💬 **Chat 2 chiều** | Gửi tin nhắn từ Telegram → Antigravity, nhận câu trả lời AI ngay trên Telegram |
-| 📝 **Single Message** | Mọi update (thinking, streaming, final) trên **1 tin nhắn duy nhất** — không spam |
-| 🔧 **CDP Injection** | Gửi lệnh qua Chrome DevTools Protocol — không chiếm chuột, không minimize cửa sổ |
-| 📊 **Quota Monitor** | Xem % sử dụng các model AI (Claude, Gemini, GPT) qua API nội bộ |
-| 🔄 **Auto Monitor** | Tự động check quota mỗi 5 phút, **chỉ ghi log khi có thay đổi** |
-| 📜 **Quota History** | Xem lịch sử cộng/trừ quota với `/history_quota` — theo dõi delta |
-| ⏱️ **Smart Polling** | Tự động điều chỉnh tốc độ polling (nhanh 3s → chậm 10s, tối đa 15 phút) |
-| 🤖 **Đổi Model** | Chuyển đổi model AI ngay trên Telegram với `/model` |
-| 📸 **Screenshot** | Chụp ảnh Antigravity IDE gửi về Telegram |
-| 🗂️ **Conversations** | Chuyển đổi qua lại giữa các cuộc trò chuyện đang mở với `/conversations` |
-| 📂 **Open Project** | Duyệt file system và mở dự án khác từ xa với `/open` |
-| ⚡ **Skills** | Chạy các workflow/skill từ folder `.agent/workflows` với `/skills` |
+| Feature | Description |
+|---------|-------------|
+| 💬 **2-Way Chat** | Send messages from Telegram → Antigravity, receive AI responses directly on Telegram |
+| 📝 **Single Message** | All updates (thinking, streaming, final) on **one single message** — no spam |
+| 🔧 **CDP Injection** | Commands via Chrome DevTools Protocol — no mouse stealing, no window minimizing |
+| 📊 **Quota Monitor** | View AI model usage (Claude, Gemini, GPT) via internal API |
+| 🔄 **Auto Monitor** | Auto-check quota every 5 minutes, **only logs when changes detected** |
+| 📜 **Quota History** | View quota change log with `/history_quota` — track deltas |
+| ⏱️ **Smart Polling** | Auto-adjusting poll speed (fast 3s → slow 10s, max 15 min timeout) |
+| 🤖 **Model Switch** | Switch AI models on Telegram with `/model` |
+| 📸 **Screenshot** | Capture Antigravity IDE screenshot to Telegram |
+| 🗂️ **Conversations** | Switch between open conversations with `/conversations` |
+| 📂 **Open Project** | Browse file system and open projects remotely with `/open` (paginated, edit-in-place) |
+| ⚡ **Workflows** | Run workflow files from `.agent/workflows` with `/workflows` |
+| 🛠️ **Skills** | Run skill folders from `.agent/skills` with `/skills` |
+| 🔴 **End Task** | Kill Antigravity process remotely with `/endtask` |
 
 ---
 
 ## 🙏 Credits
 
-Dự án này được phát triển dựa trên nền tảng [AntiBridge-Antigravity-remote](https://github.com/linhbq82/AntiBridge-Antigravity-remote) của **linhbq82**.
+This project is built upon [AntiBridge-Antigravity-remote](https://github.com/linhbq82/AntiBridge-Antigravity-remote) by **linhbq82**.
 
-Xin chân thành cảm ơn tác giả gốc đã tạo ra công cụ tuyệt vời này. Phiên bản này là bản cập nhật và cải tiến thêm các tính năng mới.
+Special thanks to the original author for creating such an amazing tool. This version adds new features and improvements.
 
 ---
 
-## 📦 Cài Đặt
+## 📦 Installation
 
-### Yêu cầu
-- **Node.js** v18 trở lên
-- **Antigravity IDE** đang chạy với cổng debug mở (mặc định: 9000)
+### Requirements
+- **Node.js** v18+
+- **Antigravity IDE** running with debug port open (default: 9000)
 
-### Hướng dẫn
+### Setup
 
 ```bash
 # 1. Clone repo
 git clone https://github.com/Nhqvu2005/AntibridgeTelegram.git
 cd AntibridgeTelegram
 
-# 2. Cài dependencies
+# 2. Install dependencies
 npm install
 
-# 3. Cấu hình
+# 3. Configure
 cp .env.example .env
-# Mở file .env, điền:
-#   TELEGRAM_BOT_TOKEN=<token từ @BotFather>
-#   TELEGRAM_CHAT_ID=<chat ID của bạn>
+# Edit .env file:
+#   TELEGRAM_BOT_TOKEN=<token from @BotFather>
+#   TELEGRAM_CHAT_ID=<your chat ID>
 #   CDP_PORT=9000
 ```
 
-### Khởi chạy
+### Run
 
-**Windows** — Chạy file `START_TELEGRAM.bat`
+**Windows** — Run `START_TELEGRAM.bat`
 
-**Hoặc chạy trực tiếp:**
+**Or run directly:**
 ```bash
 npm run telegram
 ```
 
 ---
 
-## 🎮 Các Lệnh Telegram
+## 🎮 Telegram Commands
 
-| Lệnh | Mô tả |
-|-------|-------|
-| `/start` | 👋 Khởi động bot, kiểm tra kết nối |
-| `/status` | 📊 Trạng thái kết nối tới Antigravity |
-| `/quota` | 📊 Xem quota model AI (realtime + lưu history) |
-| `/history_quota` | 📜 Xem lịch sử thay đổi quota (cộng/trừ) |
-| `/model` | 🎨 Đổi model AI (Claude, Gemini, GPT...) |
-| `/stop` | ⏹️ Dừng AI đang trả lời |
-| `/screenshot` | 📸 Chụp ảnh màn hình Antigravity |
-| `/reconnect` | 🔄 Kết nối lại CDP |
-| `/clear` | 🗑️ Xóa lịch sử chat |
-| `/accept` | ✅ Accept action hiện tại |
-| `/accept` | ✅ Accept action hiện tại |
-| `/reject` | ❌ Reject action hiện tại |
-| `/conversations` | 🗂️ Danh sách và chuyển đổi cuộc trò chuyện |
-| `/open` | 📂 Duyệt file và mở dự án (Folder) |
-| `/workflows` | ⚡ Chạy Workflow (file .md trong .agent/workflows) |
-| `/skills` | 🛠️ Chạy Skill (folder trong .agent/skills) |
+| Command | Description |
+|---------|-------------|
+| `/start` | 👋 Start bot, check connection |
+| `/status` | 📊 Connection status to Antigravity |
+| `/quota` | 📊 View AI model quotas (realtime + saved to history) |
+| `/history_quota` | 📜 View quota change log (deltas only) |
+| `/model` | 🎨 Switch AI model (Claude, Gemini, GPT...) |
+| `/stop` | ⏹️ Stop AI generation |
+| `/screenshot` | 📸 Screenshot Antigravity IDE |
+| `/reconnect` | 🔄 Reconnect to CDP |
+| `/clear` | 🗑️ Clear chat history |
+| `/accept` | ✅ Accept current action |
+| `/reject` | ❌ Reject current action |
+| `/conversations` | 🗂️ List & switch conversations |
+| `/open` | 📂 Browse files & open projects (with pagination) |
+| `/setproject <path>` | 📁 Manually set project root |
+| `/workflows` | ⚡ Run workflows from `.agent/workflows` |
+| `/skills` | 🛠️ Run skills from `.agent/skills` |
+| `/endtask` | 🔴 Kill Antigravity process |
 
 ---
 
-## 🛠️ Xử Lý Sự Cố
+## 🏗️ Architecture
 
-| Lỗi | Giải pháp |
-|-----|-----------|
-| `CDP Chat context NOT found` | Đảm bảo Antigravity đang mở và bạn đã login. Thử `/reconnect`. |
-| `Không nhận được tin nhắn` | Kiểm tra `TELEGRAM_CHAT_ID` trong `.env` có đúng không. |
-| `Bot không phản hồi` | Kiểm tra `TELEGRAM_BOT_TOKEN` và chạy lại `npm run telegram`. |
+```
+Telegram ←→ TelegramBot.js ←→ AntigravityBridge.js ←→ CDP ←→ Antigravity IDE
+                ↕                       ↕
+          QuotaService.js         chat_bridge_ws.js
+                                  detect_actions.js
+```
+
+- **TelegramBot.js** — Handles Telegram commands, message routing, UI (pagination, inline keyboards)
+- **AntigravityBridge.js** — CDP connection, DOM injection, conversation/project management
+- **QuotaService.js** — Quota monitoring, history tracking, formatted reporting
+- **chat_bridge_ws.js** — WebSocket bridge injected into Antigravity for real-time message capture
+- **detect_actions.js** — Detects Accept/Reject action buttons in the IDE
+
+---
+
+## 🛠️ Troubleshooting
+
+| Error | Solution |
+|-------|----------|
+| `CDP Chat context NOT found` | Ensure Antigravity is open and logged in. Try `/reconnect`. |
+| `Not receiving messages` | Check `TELEGRAM_CHAT_ID` in `.env`. |
+| `Bot not responding` | Verify `TELEGRAM_BOT_TOKEN` and restart with `npm run telegram`. |
+| `Port 8000 in use` | Kill existing node processes: `taskkill /F /IM node.exe` |
 
 ---
 
 ## 📄 License
 
-MIT — Xem file [LICENSE](LICENSE) để biết thêm chi tiết.
+MIT — See [LICENSE](LICENSE) for details.
 
-**Disclaimer**: Đây là công cụ không chính thức, không liên kết với Antigravity. Sử dụng theo trách nhiệm cá nhân.
+**Disclaimer**: This is an unofficial tool and is not affiliated with Antigravity. Use at your own risk.

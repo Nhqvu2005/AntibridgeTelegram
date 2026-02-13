@@ -74,6 +74,7 @@ class TelegramBotService {
             { command: 'open', description: '📂 Mở dự án khác' },
             { command: 'workflows', description: '⚡ Chạy Workflow (.agent/workflows)' },
             { command: 'skills', description: '🛠️ Chạy Skill (.agent/skills)' },
+            { command: 'endtask', description: '🔴 Tắt Antigravity' },
         ]);
 
         this.bot.onText(/\/start/, (msg) => this._handleStart(msg));
