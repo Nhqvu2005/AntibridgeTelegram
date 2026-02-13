@@ -1005,10 +1005,18 @@ class AntigravityBridge {
                 // Determine mechanism: by index or text
                 const isIndex = typeof targetVal === 'number';
 
-                // Collect all clickable items (current + others)
-                // Use safe attribute selector
-                // Note: The previous selector had a SyntaxError with :
-                const items = Array.from(document.querySelectorAll('[class*="hover:bg-list-hover"]'));
+                // Collect ALL conversation items (current + others)
+                // Current conversation uses bg-quickinput-list-focusBackground (no hover:bg-list-hover)
+                // Other conversations use hover:bg-list-hover
+                const currentItems = Array.from(document.querySelectorAll('[class*="bg-quickinput-list-focusBackground"]'));
+                const otherItems = Array.from(document.querySelectorAll('[class*="hover:bg-list-hover"]'));
+                // Merge and deduplicate
+                const seen = new Set();
+                const items = [...currentItems, ...otherItems].filter(el => {
+                    if (seen.has(el)) return false;
+                    seen.add(el);
+                    return true;
+                });
 
                 let targetEl = null;
 
