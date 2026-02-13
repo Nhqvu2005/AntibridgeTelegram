@@ -5,7 +5,7 @@
  */
 
 const TelegramBot = require('node-telegram-bot-api');
-const { exec, spawn } = require('child_process');
+const { spawn, execSync } = require('child_process');
 const path = require('path');
 const fs = require('fs');
 const QuotaService = require('./QuotaService');
@@ -92,6 +92,7 @@ class TelegramBotService {
         this.bot.onText(/\/setproject(.*)/, (msg, match) => this._handleSetProject(msg, match));
         this.bot.onText(/\/workflows/, (msg) => this._handleWorkflows(msg));
         this.bot.onText(/\/skills/, (msg) => this._handleSkills(msg));
+        this.bot.onText(/\/endtask/, (msg) => this._handleEndTask(msg));
     }
 
     _isAuthorized(msg) {
@@ -328,6 +329,32 @@ class TelegramBotService {
             await this.sendMessage(formatted);
         } catch (e) {
             await this.sendMessage(`❌ History error: ${e.message}`);
+        }
+    }
+
+    // ==========================================
+    // 🔴 END TASK: Kill Antigravity Process
+    // ==========================================
+
+    async _handleEndTask(msg) {
+        if (!this._isAuthorized(msg)) return;
+
+        try {
+            await this.sendMessage('⏳ Đang tắt Antigravity...');
+
+            try {
+                execSync('taskkill /F /IM Antigravity.exe', { stdio: 'ignore' });
+                await this.sendMessage(
+                    '✅ **Đã tắt Antigravity!**\n\n' +
+                    '🔌 CDP sẽ mất kết nối.\n' +
+                    '👉 Dùng `/open` để mở lại khi cần.'
+                );
+            } catch (killErr) {
+                // taskkill returns error if process not found
+                await this.sendMessage('⚠️ Không tìm thấy Antigravity.exe đang chạy.');
+            }
+        } catch (e) {
+            await this.sendMessage(`❌ EndTask error: ${e.message}`);
         }
     }
 
@@ -1036,7 +1063,8 @@ if ($proc) {
                                 try {
                                     // Spawn detached process
                                     // Use -r to reuse window if possible
-                                    const subprocess = spawn(exePath, ['-r', finalPath], {
+                                    const cdpPort = process.env.CDP_PORT || '9000';
+                                    const subprocess = spawn(exePath, ['-r', finalPath, `--remote-debugging-port=${cdpPort}`], {
                                         detached: true,
                                         stdio: 'ignore',
                                         windowsHide: false
