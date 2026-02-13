@@ -3388,7 +3388,7 @@ class AntigravityBridge {
                 // Focus
                 editor.focus();
 
-                // Inject text
+                // Inject text — must use method compatible with Lexical editor
                 if (editor.tagName === 'TEXTAREA') {
                     // Native setter for React compatibility
                     try {
@@ -3399,17 +3399,48 @@ class AntigravityBridge {
                         setter.call(editor, messageText);
                         editor.dispatchEvent(new Event('input', { bubbles: true }));
                     } catch (e) {
-                        // Fallback
                         editor.value = messageText;
                         editor.dispatchEvent(new Event('input', { bubbles: true }));
                     }
                 } else {
-                    // ContentEditable - use execCommand
-                    document.execCommand("selectAll", false, null);
-                    document.execCommand("insertText", false, messageText);
+                    // ContentEditable (Lexical) — execCommand does NOT work!
+                    // Lexical manages its own state tree and ignores DOM mutations.
+                    // We must use clipboard paste via DataTransfer, which Lexical handles.
+
+                    // Clear existing content first
+                    editor.focus();
+                    const selection = window.getSelection();
+                    selection.selectAllChildren(editor);
+
+                    // Method 1: Synthetic paste event with DataTransfer
+                    try {
+                        const dt = new DataTransfer();
+                        dt.setData('text/plain', messageText);
+                        const pasteEvent = new ClipboardEvent('paste', {
+                            bubbles: true,
+                            cancelable: true,
+                            clipboardData: dt
+                        });
+                        editor.dispatchEvent(pasteEvent);
+                    } catch (pasteErr) {
+                        // Method 2: InputEvent insertFromPaste (also Lexical-compatible)
+                        try {
+                            const inputEvent = new InputEvent('beforeinput', {
+                                bubbles: true,
+                                cancelable: true,
+                                inputType: 'insertText',
+                                data: messageText
+                            });
+                            editor.dispatchEvent(inputEvent);
+                        } catch (inputErr) {
+                            // Last resort: execCommand (unlikely to work)
+                            document.execCommand("selectAll", false, null);
+                            document.execCommand("insertText", false, messageText);
+                        }
+                    }
                 }
 
-                // Wait a bit, then click submit
+                // Wait a bit, then send
                 return new Promise(resolve => {
                     setTimeout(() => {
                         // Find submit button (simple selectors)
@@ -3423,16 +3454,24 @@ class AntigravityBridge {
                         } else {
                             // Fallback: Enter key
                             editor.dispatchEvent(new KeyboardEvent("keydown",
-                                { bubbles: true, key: "Enter" }
+                                { bubbles: true, key: "Enter", code: "Enter", keyCode: 13 }
                             ));
                             resolve({ ok: true, method: 'enter-key' });
                         }
-                    }, 100);
+                    }, 200);
                 });
 
             }, text);  // Pass text as argument
 
             if (result.ok) {
+                // Also press Enter via Puppeteer CDP keyboard (more reliable than JS dispatch)
+                // Lexical often ignores JS KeyboardEvent but responds to CDP Input events
+                if (result.method === 'enter-key') {
+                    try {
+                        await this.page.keyboard.press('Enter');
+                        console.log(`✅ CDP: Also pressed Enter via Puppeteer keyboard`);
+                    } catch (e) { /* ignore */ }
+                }
                 console.log(`✅ CDP: Message sent via ${result.method}`);
                 return { success: true, method: result.method };
             } else {
