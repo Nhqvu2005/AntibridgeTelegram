@@ -367,7 +367,7 @@ class TelegramBotService {
         await this.sendMessage(
             '🔄 **Restarting bot...**\n\n' +
             '⏳ Bot sẽ tự khởi động lại trong vài giây.\n' +
-            '📦 Auto `git pull` để lấy code mới nhất.'
+            '✅ Code mới nhất trên disk sẽ được load.'
         );
 
         // Give time for message to send

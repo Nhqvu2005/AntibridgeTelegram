@@ -14,9 +14,6 @@ echo.
 echo [%date% %time%] Starting Telegram Server...
 echo.
 
-:: Pull latest code before starting
-git pull origin main 2>nul
-
 node backend/telegram-server.js
 
 echo.
