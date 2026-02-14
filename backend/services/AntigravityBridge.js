@@ -682,7 +682,8 @@ class AntigravityBridge {
                                 if (notifyContainers.length > 0) {
                                     const last = notifyContainers[notifyContainers.length - 1];
                                     const text = elementToText(last);
-                                    if (text.length >= 10) return { text, strategy: 'notify' };
+                                    const rawHtml = last.innerHTML;
+                                    if (text.length >= 10) return { text, rawHtml, strategy: 'notify' };
                                 }
 
                                 // Strategy 2: Regular AI responses (prose blocks)
@@ -692,7 +693,8 @@ class AntigravityBridge {
                                 if (proseContainers.length > 0) {
                                     const last = proseContainers[proseContainers.length - 1];
                                     const text = elementToText(last);
-                                    if (text.length >= 10) return { text, strategy: 'prose' };
+                                    const rawHtml = last.innerHTML;
+                                    if (text.length >= 10) return { text, rawHtml, strategy: 'prose' };
                                 }
 
                                 return null;
@@ -701,6 +703,34 @@ class AntigravityBridge {
                             if (result && result.text && result.text.length > bestLen && result.text.length >= 10) {
                                 bestLen = result.text.length;
                                 bestText = result.text;
+
+                                // Dump raw HTML to debug file for table analysis
+                                if (result.rawHtml) {
+                                    try {
+                                        const fs = require('fs');
+                                        const path = require('path');
+                                        const debugDir = path.join(__dirname, '../../Data');
+                                        if (!fs.existsSync(debugDir)) fs.mkdirSync(debugDir, { recursive: true });
+                                        const debugFile = path.join(debugDir, 'debug_response_html.txt');
+                                        const debugContent = [
+                                            `=== DEBUG: AI Response HTML ===`,
+                                            `Timestamp: ${new Date().toISOString()}`,
+                                            `Strategy: ${result.strategy}`,
+                                            `Text length: ${result.text.length}`,
+                                            `HTML length: ${result.rawHtml.length}`,
+                                            ``,
+                                            `=== RAW HTML ===`,
+                                            result.rawHtml,
+                                            ``,
+                                            `=== EXTRACTED TEXT ===`,
+                                            result.text,
+                                        ].join('\n');
+                                        fs.writeFileSync(debugFile, debugContent, 'utf8');
+                                        console.log(`📄 Debug HTML dumped to: ${debugFile}`);
+                                    } catch (dumpErr) {
+                                        console.log(`⚠️ Debug dump failed: ${dumpErr.message}`);
+                                    }
+                                }
                             }
                         } catch (e) { /* skip */ }
                     }
