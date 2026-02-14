@@ -1285,8 +1285,15 @@ if ($proc) {
         // Save to history
         this.messageLogger?.saveHistory?.('assistant', text, message.html || null);
 
-        // Wrap table sections in code blocks for proper Telegram display
-        const formattedText = this._formatTablesForTelegram(text);
+        // Use HTML-based conversion if available (preserves tables), else format text
+        let formattedText;
+        if (message.html && message.html.includes('<t')) {
+            // HTML contains table-like elements — parse HTML for proper formatting
+            formattedText = this._htmlToFormattedText(message.html);
+            console.log('📊 Used HTML-to-text for table formatting');
+        } else {
+            formattedText = this._formatTablesForTelegram(text);
+        }
 
         // Final edit — clean format without ⏳
         await this._sendOrEditResponse(`🤖 AI:\n\n${formattedText}`);
@@ -1363,6 +1370,98 @@ if ($proc) {
         }
 
         return result.join('\n');
+    }
+
+    /**
+     * Convert HTML to formatted text, properly handling tables
+     * Uses regex-based parsing since Node.js doesn't have DOM APIs
+     * @param {string} html - Raw HTML string
+     * @returns {string} - Formatted text with tables preserved
+     */
+    _htmlToFormattedText(html) {
+        if (!html) return '';
+
+        try {
+            let text = html;
+
+            // ===== Extract and convert HTML tables =====
+            const tableRegex = /<table[^>]*>([\s\S]*?)<\/table>/gi;
+            text = text.replace(tableRegex, (match, tableContent) => {
+                const rows = [];
+
+                // Extract all rows
+                const trRegex = /<tr[^>]*>([\s\S]*?)<\/tr>/gi;
+                let trMatch;
+                while ((trMatch = trRegex.exec(tableContent)) !== null) {
+                    const cells = [];
+                    // Extract cells (th or td)
+                    const cellRegex = /<(?:th|td)[^>]*>([\s\S]*?)<\/(?:th|td)>/gi;
+                    let cellMatch;
+                    while ((cellMatch = cellRegex.exec(trMatch[1])) !== null) {
+                        // Strip HTML tags from cell content
+                        const cellText = cellMatch[1].replace(/<[^>]+>/g, '').trim();
+                        cells.push(cellText);
+                    }
+                    if (cells.length > 0) rows.push(cells);
+                }
+
+                if (rows.length === 0) return '';
+
+                // Calculate column widths
+                const colCount = Math.max(...rows.map(r => r.length));
+                const colWidths = Array(colCount).fill(0);
+                for (const row of rows) {
+                    for (let i = 0; i < row.length; i++) {
+                        colWidths[i] = Math.max(colWidths[i], (row[i] || '').length);
+                    }
+                }
+
+                // Build formatted table
+                const lines = [];
+                const separator = colWidths.map(w => '-'.repeat(w + 2)).join('+');
+
+                for (let r = 0; r < rows.length; r++) {
+                    const cells = rows[r];
+                    const line = cells.map((cell, i) =>
+                        ' ' + (cell || '').padEnd(colWidths[i] || 0) + ' '
+                    ).join('|');
+                    lines.push('|' + line + '|');
+
+                    if (r === 0) {
+                        lines.push('+' + separator + '+');
+                    }
+                }
+                return '\n```\n' + lines.join('\n') + '\n```\n';
+            });
+
+            // ===== Convert other HTML elements =====
+            // Code blocks
+            text = text.replace(/<pre[^>]*><code[^>]*>([\s\S]*?)<\/code><\/pre>/gi, '\n```\n$1\n```\n');
+            // Inline code
+            text = text.replace(/<code[^>]*>([\s\S]*?)<\/code>/gi, '`$1`');
+            // Bold
+            text = text.replace(/<(?:strong|b)[^>]*>([\s\S]*?)<\/(?:strong|b)>/gi, '**$1**');
+            // Italic
+            text = text.replace(/<(?:em|i)[^>]*>([\s\S]*?)<\/(?:em|i)>/gi, '_$1_');
+            // Line breaks and paragraphs
+            text = text.replace(/<br\s*\/?>/gi, '\n');
+            text = text.replace(/<\/p>/gi, '\n');
+            text = text.replace(/<\/li>/gi, '\n');
+            text = text.replace(/<li[^>]*>/gi, '• ');
+            // Headings
+            text = text.replace(/<h[1-6][^>]*>([\s\S]*?)<\/h[1-6]>/gi, '\n**$1**\n');
+            // Strip remaining HTML tags
+            text = text.replace(/<[^>]+>/g, '');
+            // Decode HTML entities
+            text = text.replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, "'");
+            // Clean up excessive newlines
+            text = text.replace(/\n{3,}/g, '\n\n').trim();
+
+            return text;
+        } catch (e) {
+            console.log(`⚠️ HTML to text conversion error: ${e.message}`);
+            return html.replace(/<[^>]+>/g, '').trim();
+        }
     }
 
     /**
