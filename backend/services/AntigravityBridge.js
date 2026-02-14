@@ -620,13 +620,68 @@ class AntigravityBridge {
                             if (!frameUrl || frameUrl === 'about:blank') continue;
 
                             const result = await frame.evaluate(() => {
+                                // ===== Helper: Convert HTML tables to text-formatted tables =====
+                                function htmlTableToText(tableEl) {
+                                    const rows = [];
+                                    for (const tr of tableEl.querySelectorAll('tr')) {
+                                        const cells = [];
+                                        for (const td of tr.querySelectorAll('th, td')) {
+                                            cells.push((td.innerText || '').trim());
+                                        }
+                                        rows.push(cells);
+                                    }
+                                    if (rows.length === 0) return '';
+
+                                    // Calculate column widths
+                                    const colCount = Math.max(...rows.map(r => r.length));
+                                    const colWidths = Array(colCount).fill(0);
+                                    for (const row of rows) {
+                                        for (let i = 0; i < row.length; i++) {
+                                            colWidths[i] = Math.max(colWidths[i], row[i].length);
+                                        }
+                                    }
+
+                                    // Build formatted table
+                                    const lines = [];
+                                    const separator = colWidths.map(w => '-'.repeat(w + 2)).join('+');
+
+                                    for (let r = 0; r < rows.length; r++) {
+                                        const cells = rows[r];
+                                        const line = cells.map((cell, i) =>
+                                            ' ' + cell.padEnd(colWidths[i]) + ' '
+                                        ).join('|');
+                                        lines.push('|' + line + '|');
+
+                                        // Add separator after header row
+                                        if (r === 0) {
+                                            lines.push('+' + separator + '+');
+                                        }
+                                    }
+                                    return lines.join('\n');
+                                }
+
+                                // ===== Helper: Convert element to text preserving structure =====
+                                function elementToText(container) {
+                                    const clone = container.cloneNode(true);
+                                    clone.querySelectorAll('script, style, .thinking-content').forEach(n => n.remove());
+
+                                    // Convert tables to text before extracting innerText
+                                    const tables = clone.querySelectorAll('table');
+                                    tables.forEach(table => {
+                                        const textTable = htmlTableToText(table);
+                                        const pre = document.createElement('pre');
+                                        pre.textContent = textTable;
+                                        table.replaceWith(pre);
+                                    });
+
+                                    return (clone.innerText || '').trim();
+                                }
+
                                 // Strategy 1: .notify-user-container (specific)
                                 const notifyContainers = document.querySelectorAll('.notify-user-container');
                                 if (notifyContainers.length > 0) {
                                     const last = notifyContainers[notifyContainers.length - 1];
-                                    const clone = last.cloneNode(true);
-                                    clone.querySelectorAll('script, style, .thinking-content').forEach(n => n.remove());
-                                    const text = (clone.innerText || '').trim();
+                                    const text = elementToText(last);
                                     if (text.length >= 10) return { text, strategy: 'notify' };
                                 }
 
@@ -636,9 +691,7 @@ class AntigravityBridge {
                                 );
                                 if (proseContainers.length > 0) {
                                     const last = proseContainers[proseContainers.length - 1];
-                                    const clone = last.cloneNode(true);
-                                    clone.querySelectorAll('script, style, .thinking-content').forEach(n => n.remove());
-                                    const text = (clone.innerText || '').trim();
+                                    const text = elementToText(last);
                                     if (text.length >= 10) return { text, strategy: 'prose' };
                                 }
 

@@ -890,7 +890,8 @@ class TelegramBotService {
 
                         console.log(`🤖 CDP Poll: AI response detected (${currentText.length} chars)`);
                         this.lastSentText = currentText;
-                        await this._sendOrEditResponse(`🤖 AI:\n\n${currentText}`);
+                        const formatted = this._formatTablesForTelegram(currentText);
+                        await this._sendOrEditResponse(`🤖 AI:\n\n${formatted}`);
                         this.messageLogger?.saveHistory?.('assistant', currentText, null);
                         return;
                     }
@@ -1284,8 +1285,11 @@ if ($proc) {
         // Save to history
         this.messageLogger?.saveHistory?.('assistant', text, message.html || null);
 
+        // Wrap table sections in code blocks for proper Telegram display
+        const formattedText = this._formatTablesForTelegram(text);
+
         // Final edit — clean format without ⏳
-        await this._sendOrEditResponse(`🤖 AI:\n\n${text}`);
+        await this._sendOrEditResponse(`🤖 AI:\n\n${formattedText}`);
     }
 
     /**
@@ -1319,6 +1323,47 @@ if ($proc) {
     // ==========================================
     // HELPERS
     // ==========================================
+
+    /**
+     * Format tables in text for proper Telegram display
+     * Detects table-like lines (starting with | or +) and wraps them in code blocks
+     */
+    _formatTablesForTelegram(text) {
+        if (!text) return text;
+
+        const lines = text.split('\n');
+        const result = [];
+        let inTable = false;
+
+        for (const line of lines) {
+            const trimmed = line.trim();
+            const isTableLine = trimmed.startsWith('|') || trimmed.startsWith('+--');
+
+            if (isTableLine && !inTable) {
+                // Start of table
+                inTable = true;
+                result.push('```');
+                result.push(line);
+            } else if (isTableLine && inTable) {
+                // Continue table
+                result.push(line);
+            } else if (!isTableLine && inTable) {
+                // End of table
+                inTable = false;
+                result.push('```');
+                result.push(line);
+            } else {
+                result.push(line);
+            }
+        }
+
+        // Close unclosed table block
+        if (inTable) {
+            result.push('```');
+        }
+
+        return result.join('\n');
+    }
 
     /**
      * 🧠 Helper: Lấy Project Root (CDP -> Fallback Manual)
