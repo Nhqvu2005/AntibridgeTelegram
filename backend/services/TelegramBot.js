@@ -5,7 +5,7 @@
  */
 
 const TelegramBot = require('node-telegram-bot-api');
-const { spawn, execSync } = require('child_process');
+const { spawn, exec, execSync } = require('child_process');
 const path = require('path');
 const fs = require('fs');
 const QuotaService = require('./QuotaService');
@@ -758,18 +758,95 @@ class TelegramBotService {
             // Skip commands
             if (msg.text?.startsWith('/')) return;
             if (!this._isAuthorized(msg)) return;
-            if (!msg.text) return;
 
-            const text = msg.text.trim();
-            if (!text) return;
+            // Determine if this is a text message, photo, or neither
+            const hasPhoto = msg.photo && msg.photo.length > 0;
+            const text = (msg.text || msg.caption || '').trim();
 
-            console.log(`📱 Telegram: "${text.substring(0, 50)}..."`);
+            // Skip if no text AND no photo
+            if (!text && !hasPhoto) return;
+
+            console.log(`📱 Telegram: ${hasPhoto ? '🖼️ Photo' : ''}${text ? ` "${text.substring(0, 50)}..."` : ' (no caption)'}`);
 
             // Reset active response message for new turn
             this._resetActiveResponse();
 
             // Save to history
-            this.messageLogger?.saveHistory?.('user', text, null);
+            this.messageLogger?.saveHistory?.('user', text || '[Image]', null);
+
+            // ========== HANDLE PHOTO ==========
+            if (hasPhoto) {
+                await this.sendMessage('🖼️ Đang tải ảnh và gửi cho Antigravity...');
+
+                try {
+                    // Download the highest resolution photo
+                    const photo = msg.photo[msg.photo.length - 1]; // Highest res
+                    const file = await this.bot.getFile(photo.file_id);
+                    const downloadUrl = `https://api.telegram.org/file/bot${this.botToken}/${file.file_path}`;
+
+                    // Create temp directory
+                    const tempDir = path.join(__dirname, '..', '..', 'Data', 'temp_images');
+                    if (!fs.existsSync(tempDir)) fs.mkdirSync(tempDir, { recursive: true });
+
+                    // Download image
+                    const ext = path.extname(file.file_path) || '.jpg';
+                    const localPath = path.join(tempDir, `tg_${Date.now()}${ext}`);
+
+                    const response = await fetch(downloadUrl);
+                    const arrayBuffer = await response.arrayBuffer();
+                    fs.writeFileSync(localPath, Buffer.from(arrayBuffer));
+                    console.log(`📥 Downloaded image: ${localPath} (${(arrayBuffer.byteLength / 1024).toFixed(1)}KB)`);
+
+                    // Grab baseline text BEFORE sending
+                    let baselineText = '';
+                    try { baselineText = await this.antigravityBridge.getLastAIResponse() || ''; } catch (e) { }
+
+                    // Try sending image via CDP
+                    let sent = false;
+                    if (this.antigravityBridge.isConnected) {
+                        try {
+                            const result = await this.antigravityBridge.injectImageToChat(localPath, text);
+                            if (result && result.injected) {
+                                sent = true;
+                                console.log('✅ Image sent via CDP');
+                            }
+                        } catch (e) {
+                            console.log(`⚠️ CDP image inject failed: ${e.message}`);
+                        }
+                    }
+
+                    // Fallback: PowerShell clipboard paste
+                    if (!sent) {
+                        console.log('📋 Falling back to PowerShell image clipboard...');
+                        try {
+                            await this._sendImageViaClipboard(localPath, text);
+                            sent = true;
+                            console.log('✅ Image sent via PowerShell clipboard');
+                        } catch (e) {
+                            console.error('❌ Image clipboard fallback failed:', e.message);
+                        }
+                    }
+
+                    // Cleanup temp file
+                    try { fs.unlinkSync(localPath); } catch (e) { }
+
+                    if (sent) {
+                        await this.sendMessage('✅ Đã gửi ảnh! Đang đợi AI trả lời...');
+                        this._pollForResponse(baselineText);
+                    } else {
+                        await this.sendMessage('❌ Không thể gửi ảnh. Kiểm tra Antigravity đang chạy?');
+                    }
+                } catch (e) {
+                    console.error('❌ Photo handling error:', e.message);
+                    await this.sendMessage(`❌ Lỗi xử lý ảnh: ${e.message}`);
+                }
+                return;
+            }
+
+            // ========== HANDLE TEXT-ONLY (existing flow) ==========
+            if (!text) return;
+
+            console.log(`📱 Sending text: "${text.substring(0, 50)}..."`);
 
             // Send status
             await this.sendMessage('🚀 Đang gửi cho Antigravity...');
@@ -963,6 +1040,77 @@ if ($proc) {
             fs.writeFileSync(psPath, psScript, 'utf8');
 
             exec(`powershell -ExecutionPolicy Bypass -File "${psPath}"`, { timeout: 15000 }, (err, stdout) => {
+                try { fs.unlinkSync(psPath); } catch (e) { }
+
+                if (err) {
+                    reject(new Error(`PowerShell error: ${err.message}`));
+                    return;
+                }
+
+                const output = (stdout || '').trim();
+                if (output.includes('OK')) {
+                    resolve(true);
+                } else if (output.includes('not found')) {
+                    reject(new Error('Antigravity window not found'));
+                } else {
+                    reject(new Error(`PowerShell output: ${output}`));
+                }
+            });
+        });
+    }
+
+    /**
+     * Gửi ảnh qua PowerShell clipboard
+     * Copy image → focus Antigravity → Ctrl+V → (optional caption) → Enter
+     */
+    _sendImageViaClipboard(imagePath, caption = '') {
+        return new Promise((resolve, reject) => {
+            // PowerShell: copy image to clipboard → focus Antigravity → paste
+            const captionEscaped = caption.replace(/'/g, "''").replace(/`/g, '``');
+            const psScript = `
+Add-Type -AssemblyName System.Windows.Forms
+Add-Type -AssemblyName System.Drawing
+Add-Type -TypeDefinition @"
+using System;
+using System.Runtime.InteropServices;
+public class Win32Image {
+    [DllImport("user32.dll")]
+    public static extern bool SetForegroundWindow(IntPtr hWnd);
+    [DllImport("user32.dll")]
+    public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+}
+"@
+
+# Copy image to clipboard
+$img = [System.Drawing.Image]::FromFile('${imagePath.replace(/\\/g, '\\\\')}')
+[System.Windows.Forms.Clipboard]::SetImage($img)
+$img.Dispose()
+
+# Find and focus Antigravity window
+$proc = Get-Process | Where-Object { $_.MainWindowTitle -like '*Antigravity*' -and $_.MainWindowTitle -notlike '*Manager*' } | Select-Object -First 1
+
+if ($proc) {
+    [Win32Image]::ShowWindow($proc.MainWindowHandle, 9)
+    [Win32Image]::SetForegroundWindow($proc.MainWindowHandle)
+    Start-Sleep -Milliseconds 500
+    [System.Windows.Forms.SendKeys]::SendWait("^v")
+    Start-Sleep -Milliseconds 800
+${caption ? `    # Type caption
+    [System.Windows.Forms.Clipboard]::SetText('${captionEscaped}')
+    Start-Sleep -Milliseconds 200
+    [System.Windows.Forms.SendKeys]::SendWait("^v")
+    Start-Sleep -Milliseconds 300` : ''}
+    [System.Windows.Forms.SendKeys]::SendWait("{ENTER}")
+    Write-Host "OK"
+} else {
+    Write-Host "Antigravity not found"
+}
+`;
+
+            const psPath = path.join(__dirname, '..', 'temp_tg_img_paste.ps1');
+            fs.writeFileSync(psPath, psScript, 'utf8');
+
+            exec(`powershell -ExecutionPolicy Bypass -File "${psPath}"`, { timeout: 20000 }, (err, stdout) => {
                 try { fs.unlinkSync(psPath); } catch (e) { }
 
                 if (err) {
