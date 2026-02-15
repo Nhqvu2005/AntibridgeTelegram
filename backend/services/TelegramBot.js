@@ -1382,8 +1382,16 @@ ${caption ? `    # Type caption
         const text = latest.text || '';
         if (!text || text.length < 5) return;
 
+        // Format streaming text too (use HTML if available for consistent output)
+        let displayText = text;
+        if (latest.html && latest.html.length > 10) {
+            displayText = this._htmlToFormattedText(latest.html);
+        } else {
+            displayText = this._formatTablesForTelegram(text);
+        }
+
         // Send/edit the single active response message
-        await this._sendOrEditResponse(`⏳ AI đang trả lời...\n\n${text}`);
+        await this._sendOrEditResponse(`⏳ AI đang trả lời...\n\n${displayText}`);
 
         // Reset timeout — đợi thêm data
         if (this.streamingTimeout) clearTimeout(this.streamingTimeout);
@@ -1570,6 +1578,12 @@ ${caption ? `    # Type caption
                     }
                 }
                 return '\n' + blocks.join('\n\n') + '\n';
+            });
+
+            // ===== Convert inline <pre class="inline"> first (before code blocks) =====
+            // Antigravity uses <pre class="inline"><code>...</code></pre> for inline code
+            text = text.replace(/<pre[^>]*class="[^"]*inline[^"]*"[^>]*>([\s\S]*?)<\/pre>/gi, (match, inner) => {
+                return inner.replace(/<[^>]+>/g, '').trim();
             });
 
             // ===== Convert Antigravity code blocks =====
