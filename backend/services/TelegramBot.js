@@ -1424,8 +1424,27 @@ if ($proc) {
             });
 
             // ===== Convert other HTML elements =====
-            // Code blocks
-            text = text.replace(/<pre[^>]*><code[^>]*>([\s\S]*?)<\/code><\/pre>/gi, '\n```\n$1\n```\n');
+            // Code blocks — preserve newlines from span/div/br elements
+            text = text.replace(/<pre[^>]*>\s*<code[^>]*>([\s\S]*?)<\/code>\s*<\/pre>/gi, (match, codeContent) => {
+                let code = codeContent;
+                // Insert newlines after line-level elements BEFORE stripping tags
+                code = code.replace(/<\/span>\s*<span/gi, '\n<span');
+                code = code.replace(/<\/div>/gi, '\n');
+                code = code.replace(/<br\s*\/?>/gi, '\n');
+                code = code.replace(/<\/span>/gi, '');
+                // Strip all remaining HTML tags
+                code = code.replace(/<[^>]+>/g, '');
+                // Decode entities
+                code = code.replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, "'");
+                // Remove language label from first line if present
+                const langLabels = ['javascript', 'typescript', 'python', 'java', 'go', 'rust', 'bash', 'shell', 'css', 'html', 'json', 'yaml', 'sql', 'cpp', 'csharp', 'ruby', 'php', 'swift', 'kotlin', 'jsx', 'tsx'];
+                const firstLine = code.split('\n')[0].trim().toLowerCase();
+                if (langLabels.includes(firstLine)) {
+                    code = code.substring(code.indexOf('\n') + 1);
+                }
+                code = code.replace(/\n{3,}/g, '\n').trim();
+                return '\n```\n' + code + '\n```\n';
+            });
             // Inline code
             text = text.replace(/<code[^>]*>([\s\S]*?)<\/code>/gi, '`$1`');
             // Bold
