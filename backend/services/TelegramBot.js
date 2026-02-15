@@ -779,23 +779,19 @@ class TelegramBotService {
                 await this.sendMessage('🖼️ Đang tải ảnh và gửi cho Antigravity...');
 
                 try {
-                    // Download the highest resolution photo
-                    const photo = msg.photo[msg.photo.length - 1]; // Highest res
-                    const file = await this.bot.getFile(photo.file_id);
-                    const downloadUrl = `https://api.telegram.org/file/bot${this.botToken}/${file.file_path}`;
-
                     // Create temp directory
                     const tempDir = path.join(__dirname, '..', '..', 'Data', 'temp_images');
                     if (!fs.existsSync(tempDir)) fs.mkdirSync(tempDir, { recursive: true });
 
-                    // Download image
-                    const ext = path.extname(file.file_path) || '.jpg';
-                    const localPath = path.join(tempDir, `tg_${Date.now()}${ext}`);
+                    // Pick photo: prefer medium size if available (faster), else highest
+                    const photoSizes = msg.photo;
+                    const photo = photoSizes.length > 2 ? photoSizes[photoSizes.length - 2] : photoSizes[photoSizes.length - 1];
+                    console.log(`📷 Photo size: ${photo.width}x${photo.height}, file_id: ${photo.file_id.substring(0, 20)}...`);
 
-                    const response = await fetch(downloadUrl);
-                    const arrayBuffer = await response.arrayBuffer();
-                    fs.writeFileSync(localPath, Buffer.from(arrayBuffer));
-                    console.log(`📥 Downloaded image: ${localPath} (${(arrayBuffer.byteLength / 1024).toFixed(1)}KB)`);
+                    // Use bot.downloadFile() — built-in, handles download internally
+                    const localPath = await this.bot.downloadFile(photo.file_id, tempDir);
+                    const fileSize = fs.statSync(localPath).size;
+                    console.log(`📥 Downloaded image: ${localPath} (${(fileSize / 1024).toFixed(1)}KB)`);
 
                     // Grab baseline text BEFORE sending
                     let baselineText = '';
