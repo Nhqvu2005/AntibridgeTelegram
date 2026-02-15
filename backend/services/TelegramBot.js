@@ -1332,44 +1332,30 @@ if ($proc) {
     // ==========================================
 
     /**
-     * Format tables in text for proper Telegram display
-     * Detects table-like lines (starting with | or +) and wraps them in code blocks
+     * Clean up text for Telegram display
+     * Strips CSS/style noise and cleans up code block language labels
      */
     _formatTablesForTelegram(text) {
         if (!text) return text;
 
-        const lines = text.split('\n');
-        const result = [];
-        let inTable = false;
+        // Strip leaked CSS patterns
+        text = text.replace(/@keyframes[\s\S]*?\}\s*\}/g, '');
+        text = text.replace(/\.code-block[\s\S]*?\}/g, '');
+        text = text.replace(/\*::selection\s*\{[\s\S]*?\}/g, '');
 
-        for (const line of lines) {
-            const trimmed = line.trim();
-            const isTableLine = trimmed.startsWith('|') || trimmed.startsWith('+--');
-
-            if (isTableLine && !inTable) {
-                // Start of table
-                inTable = true;
-                result.push('```');
-                result.push(line);
-            } else if (isTableLine && inTable) {
-                // Continue table
-                result.push(line);
-            } else if (!isTableLine && inTable) {
-                // End of table
-                inTable = false;
-                result.push('```');
-                result.push(line);
-            } else {
-                result.push(line);
-            }
+        // Clean up code block language labels that innerText picks up
+        const langLabels = ['javascript', 'typescript', 'python', 'java', 'go', 'rust', 'bash', 'shell', 'css', 'html', 'json', 'yaml', 'sql', 'c', 'cpp', 'csharp', 'ruby', 'php', 'swift', 'kotlin', 'jsx', 'tsx'];
+        for (const lang of langLabels) {
+            // Remove standalone language label line
+            text = text.replace(new RegExp(`^${lang}\\s*$`, 'gim'), '');
+            // Remove language label stuck to next content
+            text = text.replace(new RegExp(`^${lang}(\\s*(?://|/\\*|#|<!--|\\n))`, 'gim'), '$1');
         }
 
-        // Close unclosed table block
-        if (inTable) {
-            result.push('```');
-        }
+        // Clean up excessive newlines
+        text = text.replace(/\n{3,}/g, '\n\n').trim();
 
-        return result.join('\n');
+        return text;
     }
 
     /**
