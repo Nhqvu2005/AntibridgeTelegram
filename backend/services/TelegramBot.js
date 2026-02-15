@@ -1285,12 +1285,12 @@ if ($proc) {
         // Save to history
         this.messageLogger?.saveHistory?.('assistant', text, message.html || null);
 
-        // Use HTML-based conversion if available (preserves tables), else format text
+        // Always prefer HTML-based conversion when available
+        // (text path strips <pre> elements, losing code blocks entirely)
         let formattedText;
-        if (message.html && message.html.includes('<t')) {
-            // HTML contains table-like elements — parse HTML for proper formatting
+        if (message.html && message.html.length > 10) {
             formattedText = this._htmlToFormattedText(message.html);
-            console.log('📊 Used HTML-to-text for table formatting');
+            console.log('📊 Used HTML-to-text conversion');
         } else {
             formattedText = this._formatTablesForTelegram(text);
         }
