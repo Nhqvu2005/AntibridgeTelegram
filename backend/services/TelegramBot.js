@@ -1332,8 +1332,8 @@ if ($proc) {
     // ==========================================
 
     /**
-     * Clean up text for Telegram display
-     * Strips CSS/style noise and cleans up code block language labels
+     * Clean up text for Telegram display (no parse_mode)
+     * Strips CSS noise, language labels, and raw markdown artifacts
      */
     _formatTablesForTelegram(text) {
         if (!text) return text;
@@ -1346,11 +1346,16 @@ if ($proc) {
         // Clean up code block language labels that innerText picks up
         const langLabels = ['javascript', 'typescript', 'python', 'java', 'go', 'rust', 'bash', 'shell', 'css', 'html', 'json', 'yaml', 'sql', 'c', 'cpp', 'csharp', 'ruby', 'php', 'swift', 'kotlin', 'jsx', 'tsx'];
         for (const lang of langLabels) {
-            // Remove standalone language label line
             text = text.replace(new RegExp(`^${lang}\\s*$`, 'gim'), '');
-            // Remove language label stuck to next content
             text = text.replace(new RegExp(`^${lang}(\\s*(?://|/\\*|#|<!--|\\n))`, 'gim'), '$1');
         }
+
+        // Strip raw markdown artifacts (since no parse_mode is used)
+        text = text.replace(/```\w*\n?/g, '');  // triple backticks
+        text = text.replace(/\*\*([^*]+)\*\*/g, '$1');  // **bold**
+        text = text.replace(/__([^_]+)__/g, '$1');  // __bold__
+        text = text.replace(/(?<!\w)_([^_]+)_(?!\w)/g, '$1');  // _italic_
+        // Don't strip single backticks from code — they look fine without parse_mode
 
         // Clean up excessive newlines
         text = text.replace(/\n{3,}/g, '\n\n').trim();
@@ -1424,53 +1429,49 @@ if ($proc) {
             });
 
             // ===== Convert Antigravity code blocks =====
-            // Antigravity renders: <pre> with div.code-block > div.code-line[data-line-number]
+            // Structure: <pre> > div > div.code-block > div.code-line > div.line-content > spans
             text = text.replace(/<pre[^>]*>([\s\S]*?)<\/pre>/gi, (match, preContent) => {
-                // Check if this is an Antigravity code block
-                if (!preContent.includes('data-line-number')) {
+                // Check if Antigravity code block (has line-content divs)
+                if (!preContent.includes('line-content')) {
                     // Traditional <pre> — just strip tags
                     let code = preContent.replace(/<[^>]+>/g, '').trim();
+                    code = code.replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>');
                     if (!code) return '';
-                    return '\n```\n' + code + '\n```\n';
+                    return '\n━━━━━━━━━━━━━━━━\n' + code + '\n━━━━━━━━━━━━━━━━\n';
                 }
 
-                // Split on data-line-number markers — each is one code line
-                const chunks = preContent.split(/data-line-number="/);
+                // Extract text from each line-content div
                 const lines = [];
-                for (let i = 1; i < chunks.length; i++) { // skip first chunk (before first line)
-                    let chunk = chunks[i];
-                    // Remove everything before the first > (closing of the code-line div tag)
-                    chunk = chunk.substring(chunk.indexOf('>') + 1);
-                    // Strip all HTML tags
-                    let lineText = chunk.replace(/<[^>]+>/g, '');
-                    // Decode entities
+                const lineContentRegex = /<div[^>]*class="[^"]*line-content[^"]*"[^>]*>([\s\S]*?)<\/div>/gi;
+                let lcMatch;
+                while ((lcMatch = lineContentRegex.exec(preContent)) !== null) {
+                    let lineText = lcMatch[1].replace(/<[^>]+>/g, '');
                     lineText = lineText.replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, "'");
-                    // Trim trailing whitespace but keep leading (indentation)
-                    lineText = lineText.replace(/\s+$/, '');
                     lines.push(lineText);
                 }
 
                 if (lines.length === 0) return '';
 
                 const code = lines.join('\n').trim();
-                return '\n```\n' + code + '\n```\n';
+                return '\n━━━ Code ━━━\n' + code + '\n━━━━━━━━━━━━\n';
             });
-            // Inline code (standalone <code> not inside <pre>)
+
+            // ===== Convert other HTML elements (NO parse_mode, so no markdown syntax) =====
+            // Inline code — just show text without backticks
             text = text.replace(/<code[^>]*>([\s\S]*?)<\/code>/gi, (m, content) => {
-                const clean = content.replace(/<[^>]+>/g, '').trim();
-                return '`' + clean + '`';
+                return content.replace(/<[^>]+>/g, '').trim();
             });
-            // Bold
-            text = text.replace(/<(?:strong|b)[^>]*>([\s\S]*?)<\/(?:strong|b)>/gi, '**$1**');
-            // Italic
-            text = text.replace(/<(?:em|i)[^>]*>([\s\S]*?)<\/(?:em|i)>/gi, '_$1_');
+            // Bold — just show text (no ** since Telegram won't parse it)
+            text = text.replace(/<(?:strong|b)[^>]*>([\s\S]*?)<\/(?:strong|b)>/gi, '$1');
+            // Italic — just show text
+            text = text.replace(/<(?:em|i)[^>]*>([\s\S]*?)<\/(?:em|i)>/gi, '$1');
             // Line breaks and paragraphs
             text = text.replace(/<br\s*\/?>/gi, '\n');
             text = text.replace(/<\/p>/gi, '\n');
             text = text.replace(/<\/li>/gi, '\n');
             text = text.replace(/<li[^>]*>/gi, '• ');
-            // Headings
-            text = text.replace(/<h[1-6][^>]*>([\s\S]*?)<\/h[1-6]>/gi, '\n**$1**\n');
+            // Headings — use emoji marker instead of markdown
+            text = text.replace(/<h[1-6][^>]*>([\s\S]*?)<\/h[1-6]>/gi, '\n📍 $1\n');
             // Strip remaining HTML tags
             text = text.replace(/<[^>]+>/g, '');
             // Decode HTML entities
