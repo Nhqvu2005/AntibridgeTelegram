@@ -620,8 +620,8 @@ class AntigravityBridge {
                             if (!frameUrl || frameUrl === 'about:blank') continue;
 
                             const result = await frame.evaluate(() => {
-                                // ===== Helper: Convert HTML tables to text-formatted tables =====
-                                function htmlTableToText(tableEl) {
+                                // ===== Helper: Convert HTML tables to block format =====
+                                function htmlTableToBlocks(tableEl) {
                                     const rows = [];
                                     for (const tr of tableEl.querySelectorAll('tr')) {
                                         const cells = [];
@@ -632,32 +632,24 @@ class AntigravityBridge {
                                     }
                                     if (rows.length === 0) return '';
 
-                                    // Calculate column widths
-                                    const colCount = Math.max(...rows.map(r => r.length));
-                                    const colWidths = Array(colCount).fill(0);
-                                    for (const row of rows) {
+                                    const headers = rows[0];
+                                    const dataRows = rows.slice(1);
+                                    if (dataRows.length === 0) return headers.join(' | ');
+
+                                    // Block format: each row = block with header labels
+                                    const blocks = [];
+                                    for (const row of dataRows) {
+                                        const lines = [];
                                         for (let i = 0; i < row.length; i++) {
-                                            colWidths[i] = Math.max(colWidths[i], row[i].length);
+                                            const label = headers[i] || 'Col' + (i + 1);
+                                            const value = row[i] || '';
+                                            if (value) lines.push('  ' + label + ': ' + value);
+                                        }
+                                        if (lines.length > 0) {
+                                            blocks.push('\ud83d\udccc ' + (row[0] || '') + '\n' + lines.slice(1).join('\n'));
                                         }
                                     }
-
-                                    // Build formatted table
-                                    const lines = [];
-                                    const separator = colWidths.map(w => '-'.repeat(w + 2)).join('+');
-
-                                    for (let r = 0; r < rows.length; r++) {
-                                        const cells = rows[r];
-                                        const line = cells.map((cell, i) =>
-                                            ' ' + cell.padEnd(colWidths[i]) + ' '
-                                        ).join('|');
-                                        lines.push('|' + line + '|');
-
-                                        // Add separator after header row
-                                        if (r === 0) {
-                                            lines.push('+' + separator + '+');
-                                        }
-                                    }
-                                    return lines.join('\n');
+                                    return blocks.join('\n\n');
                                 }
 
                                 // ===== Helper: Convert element to text preserving structure =====
@@ -665,12 +657,12 @@ class AntigravityBridge {
                                     const clone = container.cloneNode(true);
                                     clone.querySelectorAll('script, style, .thinking-content').forEach(n => n.remove());
 
-                                    // Convert tables to text before extracting innerText
+                                    // Convert tables to block format before extracting innerText
                                     const tables = clone.querySelectorAll('table');
                                     tables.forEach(table => {
-                                        const textTable = htmlTableToText(table);
+                                        const textBlocks = htmlTableToBlocks(table);
                                         const pre = document.createElement('pre');
-                                        pre.textContent = textTable;
+                                        pre.textContent = textBlocks;
                                         table.replaceWith(pre);
                                     });
 

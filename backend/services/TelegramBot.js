@@ -1373,10 +1373,10 @@ if ($proc) {
     }
 
     /**
-     * Convert HTML to formatted text, properly handling tables
-     * Uses regex-based parsing since Node.js doesn't have DOM APIs
+     * Convert HTML to formatted text, handling tables as blocks
+     * Strips style/script content, converts tables to block format
      * @param {string} html - Raw HTML string
-     * @returns {string} - Formatted text with tables preserved
+     * @returns {string} - Formatted text with tables as blocks
      */
     _htmlToFormattedText(html) {
         if (!html) return '';
@@ -1384,7 +1384,12 @@ if ($proc) {
         try {
             let text = html;
 
-            // ===== Extract and convert HTML tables =====
+            // ===== FIRST: Strip style and script content entirely =====
+            text = text.replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '');
+            text = text.replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '');
+
+            // ===== Convert HTML tables to block format =====
+            // Each row becomes a block with labeled lines
             const tableRegex = /<table[^>]*>([\s\S]*?)<\/table>/gi;
             text = text.replace(tableRegex, (match, tableContent) => {
                 const rows = [];
@@ -1394,12 +1399,10 @@ if ($proc) {
                 let trMatch;
                 while ((trMatch = trRegex.exec(tableContent)) !== null) {
                     const cells = [];
-                    // Extract cells (th or td)
                     const cellRegex = /<(?:th|td)[^>]*>([\s\S]*?)<\/(?:th|td)>/gi;
                     let cellMatch;
                     while ((cellMatch = cellRegex.exec(trMatch[1])) !== null) {
-                        // Strip HTML tags from cell content
-                        const cellText = cellMatch[1].replace(/<[^>]+>/g, '').trim();
+                        const cellText = cellMatch[1].replace(/<[^>]+>/g, '').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').trim();
                         cells.push(cellText);
                     }
                     if (cells.length > 0) rows.push(cells);
@@ -1407,31 +1410,31 @@ if ($proc) {
 
                 if (rows.length === 0) return '';
 
-                // Calculate column widths
-                const colCount = Math.max(...rows.map(r => r.length));
-                const colWidths = Array(colCount).fill(0);
-                for (const row of rows) {
+                // First row = headers
+                const headers = rows[0];
+                const dataRows = rows.slice(1);
+
+                if (dataRows.length === 0) {
+                    // Only header row, just show as list
+                    return '\n' + headers.join(' | ') + '\n';
+                }
+
+                // Build block format: each data row = block with header labels
+                const blocks = [];
+                for (const row of dataRows) {
+                    const lines = [];
                     for (let i = 0; i < row.length; i++) {
-                        colWidths[i] = Math.max(colWidths[i], (row[i] || '').length);
+                        const label = headers[i] || `Col${i + 1}`;
+                        const value = row[i] || '';
+                        if (value) {
+                            lines.push(`  ${label}: ${value}`);
+                        }
+                    }
+                    if (lines.length > 0) {
+                        blocks.push('📌 ' + (row[0] || '') + '\n' + lines.slice(1).join('\n'));
                     }
                 }
-
-                // Build formatted table
-                const lines = [];
-                const separator = colWidths.map(w => '-'.repeat(w + 2)).join('+');
-
-                for (let r = 0; r < rows.length; r++) {
-                    const cells = rows[r];
-                    const line = cells.map((cell, i) =>
-                        ' ' + (cell || '').padEnd(colWidths[i] || 0) + ' '
-                    ).join('|');
-                    lines.push('|' + line + '|');
-
-                    if (r === 0) {
-                        lines.push('+' + separator + '+');
-                    }
-                }
-                return '\n```\n' + lines.join('\n') + '\n```\n';
+                return '\n' + blocks.join('\n\n') + '\n';
             });
 
             // ===== Convert other HTML elements =====
