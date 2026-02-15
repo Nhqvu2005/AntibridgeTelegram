@@ -1423,30 +1423,43 @@ if ($proc) {
                 return '\n' + blocks.join('\n\n') + '\n';
             });
 
-            // ===== Convert other HTML elements =====
-            // Code blocks — preserve newlines from span/div/br elements
-            text = text.replace(/<pre[^>]*>\s*<code[^>]*>([\s\S]*?)<\/code>\s*<\/pre>/gi, (match, codeContent) => {
-                let code = codeContent;
-                // Insert newlines after line-level elements BEFORE stripping tags
-                code = code.replace(/<\/span>\s*<span/gi, '\n<span');
-                code = code.replace(/<\/div>/gi, '\n');
-                code = code.replace(/<br\s*\/?>/gi, '\n');
-                code = code.replace(/<\/span>/gi, '');
-                // Strip all remaining HTML tags
-                code = code.replace(/<[^>]+>/g, '');
-                // Decode entities
-                code = code.replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, "'");
-                // Remove language label from first line if present
-                const langLabels = ['javascript', 'typescript', 'python', 'java', 'go', 'rust', 'bash', 'shell', 'css', 'html', 'json', 'yaml', 'sql', 'cpp', 'csharp', 'ruby', 'php', 'swift', 'kotlin', 'jsx', 'tsx'];
-                const firstLine = code.split('\n')[0].trim().toLowerCase();
-                if (langLabels.includes(firstLine)) {
-                    code = code.substring(code.indexOf('\n') + 1);
+            // ===== Convert Antigravity code blocks =====
+            // Antigravity renders: <pre> with div.code-block > div.code-line[data-line-number]
+            text = text.replace(/<pre[^>]*>([\s\S]*?)<\/pre>/gi, (match, preContent) => {
+                // Check if this is an Antigravity code block
+                if (!preContent.includes('data-line-number')) {
+                    // Traditional <pre> — just strip tags
+                    let code = preContent.replace(/<[^>]+>/g, '').trim();
+                    if (!code) return '';
+                    return '\n```\n' + code + '\n```\n';
                 }
-                code = code.replace(/\n{3,}/g, '\n').trim();
+
+                // Split on data-line-number markers — each is one code line
+                const chunks = preContent.split(/data-line-number="/);
+                const lines = [];
+                for (let i = 1; i < chunks.length; i++) { // skip first chunk (before first line)
+                    let chunk = chunks[i];
+                    // Remove everything before the first > (closing of the code-line div tag)
+                    chunk = chunk.substring(chunk.indexOf('>') + 1);
+                    // Strip all HTML tags
+                    let lineText = chunk.replace(/<[^>]+>/g, '');
+                    // Decode entities
+                    lineText = lineText.replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, "'");
+                    // Trim trailing whitespace but keep leading (indentation)
+                    lineText = lineText.replace(/\s+$/, '');
+                    lines.push(lineText);
+                }
+
+                if (lines.length === 0) return '';
+
+                const code = lines.join('\n').trim();
                 return '\n```\n' + code + '\n```\n';
             });
-            // Inline code
-            text = text.replace(/<code[^>]*>([\s\S]*?)<\/code>/gi, '`$1`');
+            // Inline code (standalone <code> not inside <pre>)
+            text = text.replace(/<code[^>]*>([\s\S]*?)<\/code>/gi, (m, content) => {
+                const clean = content.replace(/<[^>]+>/g, '').trim();
+                return '`' + clean + '`';
+            });
             // Bold
             text = text.replace(/<(?:strong|b)[^>]*>([\s\S]*?)<\/(?:strong|b)>/gi, '**$1**');
             // Italic
