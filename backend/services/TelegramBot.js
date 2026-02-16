@@ -799,15 +799,19 @@ class TelegramBotService {
 
                     // Try sending image via CDP
                     let sent = false;
+                    this._logToFile('INFO', 'ImageHandler', `Processing image: ${localPath} (${(fileSize / 1024).toFixed(1)}KB), caption: "${(text || '').substring(0, 50)}"`);
                     if (this.antigravityBridge.isConnected) {
                         try {
                             const result = await this.antigravityBridge.injectImageToChat(localPath, text);
+                            this._logToFile('INFO', 'ImageHandler', `CDP inject result: ${JSON.stringify(result)}`);
                             if (result && result.injected) {
                                 sent = true;
-                                console.log('✅ Image sent via CDP');
+                                this._logToFile('INFO', 'ImageHandler', 'Image sent via CDP');
+                            } else {
+                                this._logToFile('WARN', 'ImageHandler', `CDP inject returned falsy: ${JSON.stringify(result)}`);
                             }
                         } catch (e) {
-                            console.log(`⚠️ CDP image inject failed: ${e.message}`);
+                            this._logToFile('ERROR', 'ImageHandler', `CDP image inject exception`, e);
                         }
                     }
 
@@ -819,7 +823,7 @@ class TelegramBotService {
                             sent = true;
                             console.log('✅ Image sent via PowerShell clipboard');
                         } catch (e) {
-                            console.error('❌ Image clipboard fallback failed:', e.message);
+                            this._logToFile('ERROR', 'ImageHandler', `Clipboard fallback failed`, e);
                         }
                     }
 
