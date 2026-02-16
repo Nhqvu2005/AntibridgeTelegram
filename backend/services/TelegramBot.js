@@ -625,7 +625,7 @@ class TelegramBotService {
             const commandName = '/' + filename.replace(/\.md$/i, '');
             this._logToFile('INFO', '_executeWorkflow', `Injecting "${commandName}" (CDP: ${this.antigravityBridge.isConnected}, page: ${!!this.antigravityBridge.page})`);
 
-            const result = await this.antigravityBridge.injectTextToChat(commandName, false);
+            const result = await this.antigravityBridge.injectTextToChat(commandName + ' ', false);
             this._logToFile('INFO', '_executeWorkflow', `Inject result: ${JSON.stringify(result)}`);
 
             if (result?.success) {
@@ -738,7 +738,7 @@ class TelegramBotService {
 
             // Inject slash command into chat WITHOUT submitting (no Enter)
             const commandName = '/' + filename.replace(/\.md$/i, '');
-            const result = await this.antigravityBridge.injectTextToChat(commandName, false);
+            const result = await this.antigravityBridge.injectTextToChat(commandName + ' ', false);
             if (result?.success) {
                 await this.sendMessage(`⚡ Đã gắn ${commandName} vào chat.\nGõ thêm nội dung rồi gửi nhé!`);
             } else {
