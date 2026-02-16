@@ -622,29 +622,29 @@ class TelegramBotService {
             await this.bot.answerCallbackQuery(queryId, { text: `⚡ Workflow: ${filename}` });
 
             const commandName = '/' + filename.replace(/\.md$/i, '');
-            this._logToFile('INFO', '_executeWorkflow', `Injecting "${commandName}" with autocomplete click`);
+            // this._logToFile('INFO', '_executeWorkflow', `Injecting "${commandName}" with autocomplete click`);
 
             // Type command char-by-char and click autocomplete dropdown
             const result = await this.antigravityBridge.injectSlashCommand(commandName);
-            this._logToFile('INFO', '_executeWorkflow', `Slash command result: ${JSON.stringify(result)}`);
+            // this._logToFile('INFO', '_executeWorkflow', `Slash command result: ${JSON.stringify(result)}`);
 
             if (result?.success && result?.clicked) {
                 await this.sendMessage(`⚡ Đã gắn workflow ${commandName} vào chat.\nGõ thêm nội dung rồi gửi nhé!`);
             } else if (result?.success) {
                 await this.sendMessage(`⚡ Đã gõ ${commandName} vào chat (không tìm thấy dropdown).\nGõ thêm nội dung rồi gửi nhé!`);
             } else {
-                this._logToFile('WARN', '_executeWorkflow', `Slash command failed, clipboard fallback`);
+                // this._logToFile('WARN', '_executeWorkflow', `Slash command failed, clipboard fallback`);
                 try {
                     execSync(`echo ${commandName}| clip`, { encoding: 'utf-8' });
                     await this.sendMessage(`⚠️ CDP thất bại.\n📋 Đã copy ${commandName} vào clipboard.\nDán (Ctrl+V) vào chat nhé!`);
                 } catch (clipErr) {
-                    this._logToFile('ERROR', '_executeWorkflow', `Clipboard fallback failed`, clipErr);
+                    // this._logToFile('ERROR', '_executeWorkflow', `Clipboard fallback failed`, clipErr);
                     await this.sendMessage(`❌ Gắn workflow thất bại.`);
                 }
             }
 
         } catch (e) {
-            this._logToFile('ERROR', '_executeWorkflow', `Workflow "${filename}" error`, e);
+            // this._logToFile('ERROR', '_executeWorkflow', `Workflow "${filename}" error`, e);
             await this.sendMessage(`❌ Workflow error: ${e.message}`);
         }
     }
@@ -800,19 +800,19 @@ class TelegramBotService {
 
                     // Try sending image via CDP
                     let sent = false;
-                    this._logToFile('INFO', 'ImageHandler', `Processing image: ${localPath} (${(fileSize / 1024).toFixed(1)}KB), caption: "${(text || '').substring(0, 50)}"`);
+                    // this._logToFile('INFO', 'ImageHandler', `Processing image: ${localPath} (${(fileSize / 1024).toFixed(1)}KB), caption: "${(text || '').substring(0, 50)}"`);
                     if (this.antigravityBridge.isConnected) {
                         try {
                             const result = await this.antigravityBridge.injectImageToChat(localPath, text);
-                            this._logToFile('INFO', 'ImageHandler', `CDP inject result: ${JSON.stringify(result)}`);
+                            // this._logToFile('INFO', 'ImageHandler', `CDP inject result: ${JSON.stringify(result)}`);
                             if (result && result.injected) {
                                 sent = true;
-                                this._logToFile('INFO', 'ImageHandler', 'Image sent via CDP');
+                                // this._logToFile('INFO', 'ImageHandler', 'Image sent via CDP');
                             } else {
-                                this._logToFile('WARN', 'ImageHandler', `CDP inject returned falsy: ${JSON.stringify(result)}`);
+                                // this._logToFile('WARN', 'ImageHandler', `CDP inject returned falsy: ${JSON.stringify(result)}`);
                             }
                         } catch (e) {
-                            this._logToFile('ERROR', 'ImageHandler', `CDP image inject exception`, e);
+                            // this._logToFile('ERROR', 'ImageHandler', `CDP image inject exception`, e);
                         }
                     }
 
@@ -824,7 +824,7 @@ class TelegramBotService {
                             sent = true;
                             console.log('✅ Image sent via PowerShell clipboard');
                         } catch (e) {
-                            this._logToFile('ERROR', 'ImageHandler', `Clipboard fallback failed`, e);
+                            // this._logToFile('ERROR', 'ImageHandler', `Clipboard fallback failed`, e);
                         }
                     }
 
