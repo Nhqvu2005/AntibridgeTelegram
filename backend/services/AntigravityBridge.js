@@ -1642,132 +1642,60 @@ class AntigravityBridge {
         try {
             const fs = require('fs');
             const pathMod = require('path');
+            const { execSync } = require('child_process');
 
             if (!fs.existsSync(imagePath)) {
                 console.error(`❌ Image file not found: ${imagePath}`);
                 return false;
             }
 
-            const imageBuffer = fs.readFileSync(imagePath);
-            const base64Data = imageBuffer.toString('base64');
-            const ext = pathMod.extname(imagePath).toLowerCase().replace('.', '');
-            const mimeType = {
-                'jpg': 'image/jpeg', 'jpeg': 'image/jpeg',
-                'png': 'image/png', 'gif': 'image/gif',
-                'webp': 'image/webp', 'bmp': 'image/bmp'
-            }[ext] || 'image/png';
+            const fileSize = fs.statSync(imagePath).size;
             const fileName = pathMod.basename(imagePath);
+            console.log(`🖼️ CDP: Injecting image ${fileName} (${(fileSize / 1024).toFixed(1)}KB) via clipboard+CDP`);
 
-            console.log(`🖼️ CDP: Injecting image ${fileName} (${(imageBuffer.length / 1024).toFixed(1)}KB)`);
-
-            // Find chat frame (reuse terminal-skip logic)
-            const frames = this.page.frames();
-            let chatFrame = null;
-
-            for (const frame of frames) {
-                const frameUrl = frame.url();
-                if (!frameUrl || frameUrl === 'about:blank' || frameUrl.includes('devtools')) continue;
-                if (frameUrl.includes('terminal') || frameUrl.includes('xterm') || frameUrl.includes('pty')) continue;
-
-                try {
-                    const isTerminalFrame = await frame.evaluate(() => {
-                        return !!document.querySelector('.xterm, .xterm-viewport, .xterm-screen, [class*="terminal"], [class*="Terminal"]');
-                    }).catch(() => false);
-                    if (isTerminalFrame) continue;
-
-                    // Check if this frame has a chat input
-                    const hasChatInput = await frame.evaluate(() => {
-                        const sels = [
-                            'textarea[placeholder*="type"]', 'textarea[placeholder*="message"]',
-                            'textarea[placeholder*="chat"]', 'textarea[placeholder*="Ask"]',
-                            'textarea[placeholder*="nhập"]', 'textarea[placeholder*="prompt"]',
-                            'textarea[aria-label*="chat"]', 'textarea[aria-label*="prompt"]',
-                            '[role="textbox"]', '[contenteditable="true"]', 'textarea'
-                        ];
-                        return sels.some(s => document.querySelector(s));
-                    }).catch(() => false);
-
-                    if (hasChatInput) {
-                        chatFrame = frame;
-                        console.log(`✅ CDP: Found chat frame for image paste`);
-                        break;
-                    }
-                } catch (e) { continue; }
+            // ========== STEP 1: Copy image to clipboard via PowerShell ==========
+            const escapedPath = imagePath.replace(/\\/g, '\\\\');
+            try {
+                execSync(`powershell -NoProfile -ExecutionPolicy Bypass -Command "Add-Type -AssemblyName System.Windows.Forms; Add-Type -AssemblyName System.Drawing; $img = [System.Drawing.Image]::FromFile('${escapedPath}'); [System.Windows.Forms.Clipboard]::SetImage($img); $img.Dispose(); Write-Host 'OK'"`,
+                    { encoding: 'utf-8', timeout: 10000 }
+                );
+                console.log(`📋 Image copied to clipboard`);
+            } catch (psErr) {
+                console.error('❌ PowerShell clipboard error:', psErr.message);
+                return false;
             }
 
+            // ========== STEP 2: Focus chat input via findChatContext ==========
+            const chatFrame = await this.findChatContext();
             if (!chatFrame) {
-                console.log('❌ CDP: No chat frame found for image paste');
+                console.log('❌ CDP: Chat context not found for image paste');
                 return false;
             }
 
-            // Dispatch paste event with image file
-            const pasteResult = await chatFrame.evaluate(async (b64, mime, name) => {
-                try {
-                    const binary = atob(b64);
-                    const bytes = new Uint8Array(binary.length);
-                    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-                    const blob = new Blob([bytes], { type: mime });
-                    const file = new File([blob], name, { type: mime });
+            await chatFrame.evaluate(() => {
+                const editor = document.querySelector('[contenteditable="true"]') || document.querySelector('textarea');
+                if (editor) { editor.focus(); editor.click(); }
+            });
+            await new Promise(r => setTimeout(r, 200));
 
-                    // Find chat input
-                    const sels = [
-                        'textarea[placeholder*="type"]', 'textarea[placeholder*="message"]',
-                        'textarea[placeholder*="chat"]', 'textarea[placeholder*="Ask"]',
-                        'textarea[placeholder*="nhập"]', 'textarea[placeholder*="prompt"]',
-                        'textarea[aria-label*="chat"]', 'textarea[aria-label*="prompt"]',
-                        '[role="textbox"]', '[contenteditable="true"]', 'textarea'
-                    ];
-                    let target = null;
-                    for (const s of sels) {
-                        target = document.querySelector(s);
-                        if (target) break;
-                    }
-                    if (!target) return { success: false, error: 'No input found' };
+            // ========== STEP 3: Ctrl+V via CDP keyboard (real paste!) ==========
+            await this.page.keyboard.down('Control');
+            await this.page.keyboard.press('v');
+            await this.page.keyboard.up('Control');
+            console.log(`✅ CDP: Ctrl+V pressed`);
+            await new Promise(r => setTimeout(r, 1500));
 
-                    target.focus();
-                    target.click();
-
-                    // Create DataTransfer with file
-                    const dt = new DataTransfer();
-                    dt.items.add(file);
-
-                    // Try paste event
-                    const pasteEvent = new ClipboardEvent('paste', {
-                        bubbles: true, cancelable: true, clipboardData: dt
-                    });
-                    target.dispatchEvent(pasteEvent);
-
-                    // Also try drop event as fallback
-                    const dropEvent = new DragEvent('drop', {
-                        bubbles: true, cancelable: true, dataTransfer: dt
-                    });
-                    target.dispatchEvent(dropEvent);
-
-                    return { success: true };
-                } catch (e) {
-                    return { success: false, error: e.message };
-                }
-            }, base64Data, mimeType, fileName);
-
-            if (pasteResult && pasteResult.success) {
-                console.log(`✅ CDP: Image paste event dispatched`);
-                await new Promise(r => setTimeout(r, 1500));
-
-                // If caption provided, inject it and submit
-                if (caption && caption.trim()) {
-                    console.log(`📝 CDP: Injecting caption: "${caption.substring(0, 50)}..."`);
-                    await this.injectTextToChat(caption);
-                } else {
-                    // Press Enter to send image only
-                    await this.page.keyboard.press('Enter');
-                    console.log(`✅ CDP: Enter pressed to send image`);
-                }
-
-                return { injected: true, submitted: true };
+            // ========== STEP 4: Caption + submit ==========
+            if (caption && caption.trim()) {
+                console.log(`📝 CDP: Injecting caption: "${caption.substring(0, 50)}..."`);
+                await this.injectTextToChat(caption);
             } else {
-                console.log(`⚠️ CDP paste event failed: ${pasteResult?.error || 'unknown'}`);
-                return false;
+                await this.page.keyboard.press('Enter');
+                console.log(`✅ CDP: Enter pressed to send image`);
             }
+
+            return { injected: true, submitted: true };
+
         } catch (e) {
             console.error('❌ CDP Image Inject Error:', e.message);
             return false;
