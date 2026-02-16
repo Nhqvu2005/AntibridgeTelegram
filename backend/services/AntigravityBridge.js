@@ -1442,9 +1442,10 @@ class AntigravityBridge {
      * Inject text trực tiếp vào ô chat thông qua CDP Frames API
      * Điều này bypass cross-origin restrictions mà chat_bridge_ws.js gặp phải
      * @param {string} text - Text cần inject vào ô chat
-     * @returns {boolean} - true nếu inject thành công
+     * @param {boolean} [submit=true] - Có nhấn Enter để gửi hay chỉ inject text
+     * @returns {object|false} - { injected: true, submitted: bool } hoặc false
      */
-    async injectTextToChat(text) {
+    async injectTextToChat(text, submit = true) {
         if (!this.page) return false;
 
         try {
@@ -1612,11 +1613,15 @@ class AntigravityBridge {
             await chatInput.type(text, { delay: typeDelay });
             console.log(`✅ CDP: Typed text directly (${text.length} chars, delay=${typeDelay}ms)`);
 
-            // 4. Nhấn Enter để gửi
-            await this.page.keyboard.press('Enter');
-            console.log(`✅ CDP: Enter key sent`);
+            // 4. Nhấn Enter để gửi (nếu submit = true)
+            if (submit !== false) {
+                await this.page.keyboard.press('Enter');
+                console.log(`✅ CDP: Enter key sent`);
+            } else {
+                console.log(`✅ CDP: Text injected (no submit)`);
+            }
 
-            return { injected: true, submitted: true };
+            return { injected: true, submitted: submit !== false };
 
         } catch (e) {
             console.error('❌ CDP Inject Text Error:', e.message);

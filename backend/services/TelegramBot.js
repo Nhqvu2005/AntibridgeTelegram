@@ -616,17 +616,15 @@ class TelegramBotService {
 
     async _executeWorkflow(filename, queryId) {
         try {
-            await this.bot.answerCallbackQuery(queryId, { text: `🚀 Đang chạy workflow: ${filename}` });
-            await this.sendMessage(`🚀 **Executing Workflow: ${filename}**...`);
+            await this.bot.answerCallbackQuery(queryId, { text: `⚡ Workflow: ${filename}` });
 
-            // Inject slash command into chat (e.g., "/knowledge-guide")
+            // Inject slash command into chat WITHOUT submitting (no Enter)
             const commandName = '/' + filename.replace(/\.md$/i, '');
-            const result = await this.antigravityBridge.injectTextToChat(commandName);
-            if (result?.success) {
-                await this.sendMessage(`✅ Đã gửi ${commandName} vào chat! Đang đợi AI xử lý...`);
-                await this._pollForResponse(''); // Start polling
+            const result = await this.antigravityBridge.injectTextToChat(commandName, false);
+            if (result?.injected) {
+                await this.sendMessage(`⚡ Đã gắn ${commandName} vào chat.\nGõ thêm nội dung rồi gửi nhé!`);
             } else {
-                await this.sendMessage('❌ Gửi workflow thất bại.');
+                await this.sendMessage('❌ Gắn workflow thất bại.');
             }
 
         } catch (e) {
@@ -720,17 +718,15 @@ class TelegramBotService {
 
     async _executeSkillFile(folder, filename, queryId) {
         try {
-            await this.bot.answerCallbackQuery(queryId, { text: `🚀 Chạy ${folder}/${filename}...` });
-            await this.sendMessage(`🚀 **Executing Skill: ${folder}/${filename}**...`);
+            await this.bot.answerCallbackQuery(queryId, { text: `⚡ Skill: ${folder}/${filename}` });
 
-            // Inject slash command into chat (e.g., "/skill-name")
+            // Inject slash command into chat WITHOUT submitting (no Enter)
             const commandName = '/' + filename.replace(/\.md$/i, '');
-            const result = await this.antigravityBridge.injectTextToChat(commandName);
+            const result = await this.antigravityBridge.injectTextToChat(commandName, false);
             if (result?.injected) {
-                await this.sendMessage(`✅ Đã gửi ${commandName} vào chat!`);
-                await this._pollForResponse('');
+                await this.sendMessage(`⚡ Đã gắn ${commandName} vào chat.\nGõ thêm nội dung rồi gửi nhé!`);
             } else {
-                await this.sendMessage('❌ Gửi thất bại.');
+                await this.sendMessage('❌ Gắn skill thất bại.');
             }
         } catch (e) {
             await this.sendMessage(`❌ Execute skill error: ${e.message}`);
