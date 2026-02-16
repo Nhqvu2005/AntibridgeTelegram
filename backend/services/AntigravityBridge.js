@@ -3585,15 +3585,16 @@ class AntigravityBridge {
      * - ✅ Simple selectors (no heuristics needed)
      * 
      * @param {string} text - Text cần inject
-     * @returns {Object} - {success, method, error}
+     * @param {boolean} [submit=true] - Có nhấn Enter/click gửi không. false = chỉ gắn text
+     * @returns {Object} - {success, submitted, method, error}
      */
-    async injectTextToChat(text) {
+    async injectTextToChat(text, submit = true) {
         if (!this.page) {
             return { success: false, error: 'Not connected to Antigravity' };
         }
 
         try {
-            console.log(`📝 CDP: Injecting text (${text.length} chars): "${text.substring(0, 50)}..."`);
+            console.log(`📝 CDP: Injecting text (${text.length} chars, submit=${submit}): "${text.substring(0, 50)}..."`);
 
             // ========== STEP 1: GET CHAT CONTEXT ==========
             const chatFrame = await this.findChatContext();
@@ -3606,7 +3607,7 @@ class AntigravityBridge {
             // Trong ĐÚNG context, không cần worry về terminal!
             // Terminal ở context KHÁC → querySelector sẽ KHÔNG thấy nó!
 
-            const result = await chatFrame.evaluate((messageText) => {
+            const result = await chatFrame.evaluate((messageText, shouldSubmit) => {
                 // ⚡ CODE NÀY CHẠY TRONG CHAT CONTEXT
                 // Terminal input KHÔNG TỒN TẠI ở đây!
 
@@ -3673,6 +3674,11 @@ class AntigravityBridge {
                     }
                 }
 
+                // If submit=false, just return — text is in the editor, don’t send
+                if (!shouldSubmit) {
+                    return { ok: true, method: 'inject-only', submitted: false };
+                }
+
                 // Wait a bit, then send
                 return new Promise(resolve => {
                     setTimeout(() => {
@@ -3694,19 +3700,20 @@ class AntigravityBridge {
                     }, 200);
                 });
 
-            }, text);  // Pass text as argument
+            }, text, submit);  // Pass text AND submit as arguments
 
             if (result.ok) {
                 // Also press Enter via Puppeteer CDP keyboard (more reliable than JS dispatch)
                 // Lexical often ignores JS KeyboardEvent but responds to CDP Input events
-                if (result.method === 'enter-key') {
+                // BUT ONLY if we are submitting!
+                if (submit && result.method === 'enter-key') {
                     try {
                         await this.page.keyboard.press('Enter');
                         console.log(`✅ CDP: Also pressed Enter via Puppeteer keyboard`);
                     } catch (e) { /* ignore */ }
                 }
-                console.log(`✅ CDP: Message sent via ${result.method}`);
-                return { success: true, method: result.method };
+                console.log(`✅ CDP: ${submit ? 'Message sent' : 'Text injected'} via ${result.method}`);
+                return { success: true, submitted: !!submit, method: result.method };
             } else {
                 console.log(`❌ CDP: Injection failed: ${result.reason}`);
                 return { success: false, error: result.reason };

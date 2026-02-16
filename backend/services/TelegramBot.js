@@ -628,7 +628,7 @@ class TelegramBotService {
             const result = await this.antigravityBridge.injectTextToChat(commandName, false);
             this._logToFile('INFO', '_executeWorkflow', `Inject result: ${JSON.stringify(result)}`);
 
-            if (result?.injected) {
+            if (result?.success) {
                 await this.sendMessage(`⚡ Đã gắn ${commandName} vào chat.\nGõ thêm nội dung rồi gửi nhé!`);
             } else {
                 // CDP failed — copy to clipboard as fallback
@@ -739,7 +739,7 @@ class TelegramBotService {
             // Inject slash command into chat WITHOUT submitting (no Enter)
             const commandName = '/' + filename.replace(/\.md$/i, '');
             const result = await this.antigravityBridge.injectTextToChat(commandName, false);
-            if (result?.injected) {
+            if (result?.success) {
                 await this.sendMessage(`⚡ Đã gắn ${commandName} vào chat.\nGõ thêm nội dung rồi gửi nhé!`);
             } else {
                 await this.sendMessage('❌ Gắn skill thất bại.');
