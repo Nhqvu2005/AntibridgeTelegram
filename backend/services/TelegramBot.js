@@ -620,14 +620,26 @@ class TelegramBotService {
 
             // Inject slash command into chat WITHOUT submitting (no Enter)
             const commandName = '/' + filename.replace(/\.md$/i, '');
+            console.log(`⚡ Workflow: Injecting "${commandName}" (CDP connected: ${this.antigravityBridge.isConnected}, page: ${!!this.antigravityBridge.page})`);
+
             const result = await this.antigravityBridge.injectTextToChat(commandName, false);
+            console.log(`⚡ Workflow inject result:`, JSON.stringify(result));
+
             if (result?.injected) {
                 await this.sendMessage(`⚡ Đã gắn ${commandName} vào chat.\nGõ thêm nội dung rồi gửi nhé!`);
             } else {
-                await this.sendMessage('❌ Gắn workflow thất bại.');
+                // CDP failed — copy to clipboard as fallback
+                console.log(`⚠️ CDP inject failed, copying to clipboard...`);
+                try {
+                    execSync(`echo ${commandName}| clip`, { encoding: 'utf-8' });
+                    await this.sendMessage(`⚠️ CDP inject thất bại.\n📋 Đã copy ${commandName} vào clipboard.\nDán (Ctrl+V) vào chat Antigravity nhé!`);
+                } catch (e) {
+                    await this.sendMessage(`❌ Gắn workflow thất bại. CDP: ${this.antigravityBridge.isConnected ? 'connected' : 'disconnected'}`);
+                }
             }
 
         } catch (e) {
+            console.error(`❌ Workflow error:`, e);
             await this.sendMessage(`❌ Workflow error: ${e.message}`);
         }
     }
