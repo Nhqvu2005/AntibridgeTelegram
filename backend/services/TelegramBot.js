@@ -29,8 +29,11 @@ class TelegramBotService {
         this.isProcessing = false;
 
         // Manual override for project root (fallback if CDP fails)
-        // Default to current working directory (where bot is running)
-        this.manualProjectRoot = process.cwd();
+        // Load saved project root first, fallback to cwd
+        this._projectRootFile = path.join(__dirname, '..', '..', 'Data', 'last_project.txt');
+        this._errorLogFile = path.join(__dirname, '..', '..', 'Data', 'error_log.txt');
+        this.manualProjectRoot = this._loadProjectRoot() || process.cwd();
+        console.log(`📂 Project root: ${this.manualProjectRoot}`);
 
         // Load available models from env
         this.availableModels = (process.env.AVAILABLE_MODELS || '')
@@ -620,26 +623,27 @@ class TelegramBotService {
 
             // Inject slash command into chat WITHOUT submitting (no Enter)
             const commandName = '/' + filename.replace(/\.md$/i, '');
-            console.log(`⚡ Workflow: Injecting "${commandName}" (CDP connected: ${this.antigravityBridge.isConnected}, page: ${!!this.antigravityBridge.page})`);
+            this._logToFile('INFO', '_executeWorkflow', `Injecting "${commandName}" (CDP: ${this.antigravityBridge.isConnected}, page: ${!!this.antigravityBridge.page})`);
 
             const result = await this.antigravityBridge.injectTextToChat(commandName, false);
-            console.log(`⚡ Workflow inject result:`, JSON.stringify(result));
+            this._logToFile('INFO', '_executeWorkflow', `Inject result: ${JSON.stringify(result)}`);
 
             if (result?.injected) {
                 await this.sendMessage(`⚡ Đã gắn ${commandName} vào chat.\nGõ thêm nội dung rồi gửi nhé!`);
             } else {
                 // CDP failed — copy to clipboard as fallback
-                console.log(`⚠️ CDP inject failed, copying to clipboard...`);
+                this._logToFile('WARN', '_executeWorkflow', `CDP inject failed for "${commandName}", falling back to clipboard`);
                 try {
                     execSync(`echo ${commandName}| clip`, { encoding: 'utf-8' });
                     await this.sendMessage(`⚠️ CDP inject thất bại.\n📋 Đã copy ${commandName} vào clipboard.\nDán (Ctrl+V) vào chat Antigravity nhé!`);
-                } catch (e) {
+                } catch (clipErr) {
+                    this._logToFile('ERROR', '_executeWorkflow', `Clipboard fallback also failed`, clipErr);
                     await this.sendMessage(`❌ Gắn workflow thất bại. CDP: ${this.antigravityBridge.isConnected ? 'connected' : 'disconnected'}`);
                 }
             }
 
         } catch (e) {
-            console.error(`❌ Workflow error:`, e);
+            this._logToFile('ERROR', '_executeWorkflow', `Workflow "${filename}" error`, e);
             await this.sendMessage(`❌ Workflow error: ${e.message}`);
         }
     }
@@ -1217,6 +1221,7 @@ ${caption ? `    # Type caption
                         try {
                             // Direct Native Launch (bypassing CDP as requested)
                             this.manualProjectRoot = finalPath;
+                            this._saveProjectRoot(finalPath);
 
                             const exePath = await this._findAntigravityExecutable();
                             let launched = false;
@@ -1649,6 +1654,7 @@ ${caption ? `    # Type caption
         if (cdpRoot && !cdpRoot.startsWith('ERROR_') && cdpRoot !== 'NO_WORKSPACE') {
             // Update manual root to sync
             this.manualProjectRoot = cdpRoot;
+            this._saveProjectRoot(cdpRoot);
             return cdpRoot;
         }
 
@@ -1675,11 +1681,73 @@ ${caption ? `    # Type caption
 
         if (fs.existsSync(pathStr)) {
             this.manualProjectRoot = pathStr;
+            this._saveProjectRoot(pathStr);
             await this.sendMessage(`✅ Đã set Project Root thủ công: \`${pathStr}\`\n(Bạn có thể dùng /skills now!)`);
         } else {
             await this.sendMessage(`❌ Đường dẫn không tồn tại: \`${pathStr}\``);
         }
     }
+
+    // ==========================================
+    // PERSISTENCE & LOGGING HELPERS
+    // ==========================================
+
+    /**
+     * Save project root to disk for persistence across restarts
+     */
+    _saveProjectRoot(rootPath) {
+        try {
+            const dir = path.dirname(this._projectRootFile);
+            if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+            fs.writeFileSync(this._projectRootFile, rootPath, 'utf-8');
+            console.log(`💾 Saved project root: ${rootPath}`);
+        } catch (e) {
+            console.error(`❌ Failed to save project root:`, e.message);
+        }
+    }
+
+    /**
+     * Load saved project root from disk
+     */
+    _loadProjectRoot() {
+        try {
+            if (fs.existsSync(this._projectRootFile)) {
+                const saved = fs.readFileSync(this._projectRootFile, 'utf-8').trim();
+                if (saved && fs.existsSync(saved)) {
+                    console.log(`📂 Loaded saved project root: ${saved}`);
+                    return saved;
+                }
+            }
+        } catch (e) { /* ignore */ }
+        return null;
+    }
+
+    /**
+     * Ghi log vào file Data/error_log.txt
+     * @param {string} level - 'ERROR' | 'WARN' | 'INFO'
+     * @param {string} context - Tên function/module
+     * @param {string} message - Nội dung log
+     * @param {Error} [error] - Error object (optional)
+     */
+    _logToFile(level, context, message, error = null) {
+        try {
+            const now = new Date().toISOString();
+            let line = `[${now}] [${level}] [${context}] ${message}`;
+            if (error) {
+                line += `\n  Stack: ${error.stack || error.message}`;
+            }
+            line += '\n';
+
+            const dir = path.dirname(this._errorLogFile);
+            if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+            fs.appendFileSync(this._errorLogFile, line, 'utf-8');
+
+            // Also log to console
+            if (level === 'ERROR') console.error(line.trim());
+            else console.log(line.trim());
+        } catch (e) { /* silent */ }
+    }
+
     // ==========================================
 
     /**
