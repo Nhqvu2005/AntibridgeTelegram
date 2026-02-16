@@ -616,24 +616,17 @@ class TelegramBotService {
 
     async _executeWorkflow(filename, queryId) {
         try {
-            const rootPath = await this._getProjectRoot();
-            if (!rootPath) throw new Error('Root path not found');
+            await this.bot.answerCallbackQuery(queryId, { text: `🚀 Đang chạy workflow: ${filename}` });
+            await this.sendMessage(`🚀 **Executing Workflow: ${filename}**...`);
 
-            const filePath = path.join(rootPath, '.agent', 'workflows', filename);
-            if (!fs.existsSync(filePath)) throw new Error('Skill file not found');
-
-            const content = fs.readFileSync(filePath, 'utf-8');
-
-            await this.bot.answerCallbackQuery(queryId, { text: `🚀 Đang chạy skill: ${filename}` });
-            await this.sendMessage(`🚀 **Executing Skill: ${filename}**...`);
-
-            // Inject to chat
-            const result = await this.antigravityBridge.injectTextToChat(content);
+            // Inject slash command into chat (e.g., "/knowledge-guide")
+            const commandName = '/' + filename.replace(/\.md$/i, '');
+            const result = await this.antigravityBridge.injectTextToChat(commandName);
             if (result?.success) {
-                await this.sendMessage('✅ Đã gửi skill vào chat! Đang đợi AI xử lý...');
+                await this.sendMessage(`✅ Đã gửi ${commandName} vào chat! Đang đợi AI xử lý...`);
                 await this._pollForResponse(''); // Start polling
             } else {
-                await this.sendMessage('❌ Gửi skill thất bại.');
+                await this.sendMessage('❌ Gửi workflow thất bại.');
             }
 
         } catch (e) {
@@ -727,19 +720,14 @@ class TelegramBotService {
 
     async _executeSkillFile(folder, filename, queryId) {
         try {
-            const rootPath = await this.antigravityBridge.getCurrentProjectRoot();
-            const filePath = path.join(rootPath, '.agent', 'skills', folder, filename);
-
-            if (!fs.existsSync(filePath)) throw new Error('Skill file not found');
-
-            const content = fs.readFileSync(filePath, 'utf-8');
-
             await this.bot.answerCallbackQuery(queryId, { text: `🚀 Chạy ${folder}/${filename}...` });
             await this.sendMessage(`🚀 **Executing Skill: ${folder}/${filename}**...`);
 
-            const result = await this.antigravityBridge.injectTextToChat(content);
-            if (result?.success) {
-                await this.sendMessage('✅ Đã gửi skill vào chat!');
+            // Inject slash command into chat (e.g., "/skill-name")
+            const commandName = '/' + filename.replace(/\.md$/i, '');
+            const result = await this.antigravityBridge.injectTextToChat(commandName);
+            if (result?.injected) {
+                await this.sendMessage(`✅ Đã gửi ${commandName} vào chat!`);
                 await this._pollForResponse('');
             } else {
                 await this.sendMessage('❌ Gửi thất bại.');
