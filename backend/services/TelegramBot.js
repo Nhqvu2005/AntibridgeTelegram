@@ -621,24 +621,25 @@ class TelegramBotService {
         try {
             await this.bot.answerCallbackQuery(queryId, { text: `⚡ Workflow: ${filename}` });
 
-            // Inject slash command into chat WITHOUT submitting (no Enter)
             const commandName = '/' + filename.replace(/\.md$/i, '');
-            this._logToFile('INFO', '_executeWorkflow', `Injecting "${commandName}" (CDP: ${this.antigravityBridge.isConnected}, page: ${!!this.antigravityBridge.page})`);
+            this._logToFile('INFO', '_executeWorkflow', `Injecting "${commandName}" with autocomplete click`);
 
-            const result = await this.antigravityBridge.injectTextToChat(commandName + ' ', false);
-            this._logToFile('INFO', '_executeWorkflow', `Inject result: ${JSON.stringify(result)}`);
+            // Type command char-by-char and click autocomplete dropdown
+            const result = await this.antigravityBridge.injectSlashCommand(commandName);
+            this._logToFile('INFO', '_executeWorkflow', `Slash command result: ${JSON.stringify(result)}`);
 
-            if (result?.success) {
-                await this.sendMessage(`⚡ Đã gắn ${commandName} vào chat.\nGõ thêm nội dung rồi gửi nhé!`);
+            if (result?.success && result?.clicked) {
+                await this.sendMessage(`⚡ Đã gắn workflow ${commandName} vào chat.\nGõ thêm nội dung rồi gửi nhé!`);
+            } else if (result?.success) {
+                await this.sendMessage(`⚡ Đã gõ ${commandName} vào chat (không tìm thấy dropdown).\nGõ thêm nội dung rồi gửi nhé!`);
             } else {
-                // CDP failed — copy to clipboard as fallback
-                this._logToFile('WARN', '_executeWorkflow', `CDP inject failed for "${commandName}", falling back to clipboard`);
+                this._logToFile('WARN', '_executeWorkflow', `Slash command failed, clipboard fallback`);
                 try {
                     execSync(`echo ${commandName}| clip`, { encoding: 'utf-8' });
-                    await this.sendMessage(`⚠️ CDP inject thất bại.\n📋 Đã copy ${commandName} vào clipboard.\nDán (Ctrl+V) vào chat Antigravity nhé!`);
+                    await this.sendMessage(`⚠️ CDP thất bại.\n📋 Đã copy ${commandName} vào clipboard.\nDán (Ctrl+V) vào chat nhé!`);
                 } catch (clipErr) {
-                    this._logToFile('ERROR', '_executeWorkflow', `Clipboard fallback also failed`, clipErr);
-                    await this.sendMessage(`❌ Gắn workflow thất bại. CDP: ${this.antigravityBridge.isConnected ? 'connected' : 'disconnected'}`);
+                    this._logToFile('ERROR', '_executeWorkflow', `Clipboard fallback failed`, clipErr);
+                    await this.sendMessage(`❌ Gắn workflow thất bại.`);
                 }
             }
 

@@ -1702,6 +1702,144 @@ class AntigravityBridge {
         }
     }
 
+    /**
+     * 📝 Inject slash command and click the autocomplete suggestion
+     * Types the command char-by-char to trigger Antigravity's autocomplete dropdown,
+     * then clicks the matching suggestion item.
+     * 
+     * @param {string} command - Slash command like "/test"
+     * @returns {Object} - {success, clicked, method}
+     */
+    async injectSlashCommand(command) {
+        if (!this.page) return { success: false, error: 'Not connected' };
+
+        try {
+            console.log(`⚡ CDP: Injecting slash command "${command}" with autocomplete click`);
+
+            // STEP 1: Find chat context
+            const chatFrame = await this.findChatContext();
+            if (!chatFrame) {
+                console.log('❌ CDP: Chat context not found');
+                return { success: false, error: 'Chat context not found' };
+            }
+
+            // STEP 2: Focus editor
+            await chatFrame.evaluate(() => {
+                const editor = document.querySelector('[contenteditable="true"]') ||
+                    document.querySelector('textarea');
+                if (editor) { editor.focus(); editor.click(); }
+            });
+            await new Promise(r => setTimeout(r, 100));
+
+            // STEP 3: Clear existing text first
+            await this.page.keyboard.down('Control');
+            await this.page.keyboard.press('a');
+            await this.page.keyboard.up('Control');
+            await this.page.keyboard.press('Backspace');
+            await new Promise(r => setTimeout(r, 100));
+
+            // STEP 4: Type command char-by-char to trigger autocomplete
+            for (const char of command) {
+                await this.page.keyboard.type(char, { delay: 50 });
+            }
+            console.log(`⌨️ CDP: Typed "${command}" char-by-char`);
+
+            // STEP 5: Wait for autocomplete dropdown to appear
+            await new Promise(r => setTimeout(r, 500));
+
+            // STEP 6: Look for suggestion items and click the matching one
+            // Try multiple selectors that Antigravity/VS Code may use for suggestion dropdowns
+            const clicked = await chatFrame.evaluate((cmd) => {
+                // Search for suggestion/completion items
+                // Common patterns in VS Code extensions and chat UIs
+                const selectors = [
+                    // Generic list items near chat
+                    '[class*="suggest"] [class*="item"]',
+                    '[class*="suggest"] [class*="row"]',
+                    '[class*="completion"] [class*="item"]',
+                    '[class*="autocomplete"] [class*="item"]',
+                    '[class*="dropdown"] [class*="item"]',
+                    '[class*="menu"] [class*="item"]',
+                    // VS Code specific
+                    '.monaco-list-row',
+                    '.suggest-widget .monaco-list-row',
+                    // Role-based
+                    '[role="option"]',
+                    '[role="listbox"] [role="option"]',
+                    '[role="menuitem"]',
+                    // Antigravity specific (slash command suggestions)
+                    '[class*="slash"] [class*="item"]',
+                    '[class*="command"] [class*="item"]',
+                    // Generic clickable items that might contain the command text
+                    'li[class*="suggest"]',
+                    'div[class*="suggest"]',
+                ];
+
+                const cmdName = cmd.replace(/^\//, '').toLowerCase();
+                let allFound = [];
+
+                for (const sel of selectors) {
+                    const items = document.querySelectorAll(sel);
+                    if (items.length > 0) {
+                        for (const item of items) {
+                            const text = (item.textContent || '').toLowerCase();
+                            allFound.push({ selector: sel, text: text.substring(0, 100) });
+                            if (text.includes(cmdName)) {
+                                item.click();
+                                return { clicked: true, selector: sel, text: text.substring(0, 100) };
+                            }
+                        }
+                    }
+                }
+
+                // Broader search: any element containing the command name that looks clickable
+                const allElements = document.querySelectorAll('div, li, span, button, a');
+                for (const el of allElements) {
+                    const text = (el.textContent || '').toLowerCase().trim();
+                    const isSmall = text.length < 100; // Skip large containers
+                    if (isSmall && text.includes(cmdName)) {
+                        // Check if it looks like a dropdown/suggestion item
+                        const styles = window.getComputedStyle(el);
+                        const parent = el.parentElement;
+                        const parentClass = (parent?.className || '').toLowerCase();
+                        const elClass = (el.className || '').toLowerCase();
+
+                        const isSuggestion =
+                            parentClass.includes('suggest') || parentClass.includes('menu') ||
+                            parentClass.includes('list') || parentClass.includes('dropdown') ||
+                            parentClass.includes('completion') || parentClass.includes('option') ||
+                            elClass.includes('suggest') || elClass.includes('menu') ||
+                            elClass.includes('item') || elClass.includes('option') ||
+                            el.getAttribute('role') === 'option' ||
+                            el.getAttribute('role') === 'menuitem';
+
+                        if (isSuggestion) {
+                            el.click();
+                            return { clicked: true, selector: 'broad-search', className: elClass.substring(0, 100), text: text.substring(0, 50) };
+                        }
+                    }
+                }
+
+                return { clicked: false, found: allFound.slice(0, 10) };
+            }, command);
+
+            console.log(`⚡ CDP: Autocomplete click result:`, JSON.stringify(clicked));
+
+            if (clicked?.clicked) {
+                console.log(`✅ CDP: Clicked suggestion item: ${clicked.text || clicked.selector}`);
+                return { success: true, clicked: true, method: 'autocomplete-click' };
+            } else {
+                console.log(`⚠️ CDP: No matching suggestion found. Items found:`, JSON.stringify(clicked?.found || []));
+                // Fallback: just leave the typed text in place
+                return { success: true, clicked: false, method: 'typed-only', note: 'No autocomplete item found' };
+            }
+
+        } catch (e) {
+            console.error('❌ CDP SlashCommand Error:', e.message);
+            return { success: false, error: e.message };
+        }
+    }
+
     async connect(retryCount = 3) {
         if (this.isConnected) return true;
 
