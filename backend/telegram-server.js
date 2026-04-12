@@ -93,6 +93,14 @@ const telegramBot = new TelegramBotService({
 });
 
 // ==========================================
+// WIRE CDP POLLING → TELEGRAM BOT
+// DISABLED: BG Monitor in TelegramBot handles response delivery now
+// EventBus handlers below were creating duplicate messages
+// ==========================================
+// eventBus.onBroadcast('chat_update', (data) => { ... });
+// eventBus.onBroadcast('chat_complete', (data) => { ... });
+
+// ==========================================
 // WEBSOCKET HANDLERS (bridge scripts communication)
 // ==========================================
 
@@ -214,6 +222,10 @@ async function startup() {
         const connected = await antigravityBridge.connect();
         if (connected) {
             console.log('✅ CDP connected!');
+            // Start chat polling so CDP extracts messages → EventBus → Telegram
+            antigravityBridge.startChatPolling('telegram-session');
+            antigravityBridge.startButtonAutoClicker();
+            console.log('✅ Chat polling + Button auto-clicker started');
         } else {
             console.log('⚠️ CDP chưa kết nối. Antigravity có đang chạy không?');
             console.log('   Chạy: Antigravity.exe --remote-debugging-port=9000');

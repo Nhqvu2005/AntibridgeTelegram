@@ -28,6 +28,9 @@ class TelegramBotService {
         this.lastSentText = '';
         this.isProcessing = false;
 
+        // Cloudflare Tunnel state: Map<port, { process, url }>
+        this._tunnels = new Map();
+
         // Manual override for project root (fallback if CDP fails)
         // Load saved project root first, fallback to cwd
         this._projectRootFile = path.join(__dirname, '..', '..', 'Data', 'last_project.txt');
@@ -53,6 +56,117 @@ class TelegramBotService {
         this.quotaService.startMonitor();
 
         console.log('🤖 Telegram Bot initialized');
+
+        // Start background AI response monitor (detects responses even from IDE-originated messages)
+        this._startBackgroundMonitor();
+    }
+
+    /**
+     * Background monitor: polls getLastAIResponse() every 2s
+     * Detects new AI responses regardless of origin (Telegram or IDE direct)
+     */
+    _startBackgroundMonitor() {
+        this._lastMonitoredText = '';
+        this._lastMonitoredThinking = '';
+        this._monitorCount = 0;
+        this._bgMonitorMsgId = null;
+        this._skipInitialPolls = 3;
+
+        this._bgMonitorInterval = setInterval(async () => {
+            if (!this.antigravityBridge?.isConnected) return;
+
+            this._monitorCount++;
+            try {
+                const result = await this.antigravityBridge.getLastAIResponse();
+                if (!result) return;
+
+                const currentText = (result.text || '').trim();
+                const currentThinking = (result.thinking || '').trim();
+                const currentTaskProgress = (result.taskProgress || '').trim();
+
+                // Skip initial polls — just set baseline without sending
+                if (this._skipInitialPolls > 0) {
+                    this._skipInitialPolls--;
+                    this._lastMonitoredText = currentText;
+                    this._lastMonitoredThinking = currentThinking;
+                    this._lastMonitoredProgress = currentTaskProgress;
+                    if (this._skipInitialPolls === 0) {
+                        console.log(`🔔 BG Monitor: Baseline set. Now monitoring.`);
+                    }
+                    return;
+                }
+
+                // Nothing to show
+                if (currentText.length < 10 && currentThinking.length < 10 && currentTaskProgress.length < 10) return;
+
+                // Determine what actually CHANGED
+                const responseChanged = currentText !== this._lastMonitoredText;
+                const thinkingChanged = currentThinking !== this._lastMonitoredThinking;
+                const progressChanged = currentTaskProgress !== this._lastMonitoredProgress;
+
+                // Update tracked state
+                this._lastMonitoredText = currentText;
+                this._lastMonitoredThinking = currentThinking;
+                this._lastMonitoredProgress = currentTaskProgress;
+
+                // Show what CHANGED — prefer task progress over stale response
+                let displayMsg = '';
+                if (progressChanged && currentTaskProgress.length >= 10) {
+                    // Task progress changed → ALWAYS show task progress (task is actively running)
+                    displayMsg = `📋 Progress:\n${currentTaskProgress}`;
+                } else if (responseChanged && currentText.length >= 10 && !progressChanged) {
+                    // Response changed but progress did NOT → task is done, show final response
+                    const formatted = this._formatTablesForTelegram(currentText);
+                    displayMsg = `🤖 AI:\n\n${formatted}`;
+                } else if (thinkingChanged && currentThinking.length >= 10) {
+                    // Thinking changed → show thinking
+                    displayMsg = `💭 Thinking:\n${currentThinking}`;
+                } else if (responseChanged && currentText.length >= 10) {
+                    // Response changed (with progress also changing) → show response too
+                    const formatted = this._formatTablesForTelegram(currentText);
+                    displayMsg = `🤖 AI:\n\n${formatted}`;
+                } else {
+                    // Nothing meaningful changed — skip
+                    return;
+                }
+
+                // Truncate for Telegram 4096 limit
+                if (displayMsg.length > 4000) {
+                    displayMsg = displayMsg.substring(displayMsg.length - 4000);
+                }
+
+                // NO placeholder yet? Create one (for IDE-originated messages)
+                if (!this._bgMonitorMsgId) {
+                    try {
+                        const sent = await this.bot.sendMessage(this.chatId, displayMsg);
+                        this._bgMonitorMsgId = sent.message_id;
+                        console.log(`📨 BG Monitor: Created msg ${sent.message_id}`);
+                    } catch (e) {
+                        console.log(`⚠️ BG Monitor send error: ${e.message?.substring(0, 60)}`);
+                    }
+                    return;
+                }
+
+                // EDIT the existing message (strict 1-message policy)
+                try {
+                    await this.bot.editMessageText(displayMsg, {
+                        chat_id: this.chatId,
+                        message_id: this._bgMonitorMsgId
+                    });
+                } catch (editErr) {
+                    if (!editErr.message?.includes('not modified')) {
+                        console.log(`⚠️ BG Monitor edit error: ${editErr.message?.substring(0, 60)}`);
+                    }
+                }
+
+            } catch (e) {
+                if (this._monitorCount % 30 === 0) {
+                    console.log(`⚠️ BG Monitor error: ${e.message?.substring(0, 60)}`);
+                }
+            }
+        }, 1500);
+
+        console.log('🔔 Background AI response monitor started (1.5s)');
     }
 
     // ==========================================
@@ -79,6 +193,11 @@ class TelegramBotService {
             { command: 'skills', description: '🛠️ Chạy Skill (.agent/skills)' },
             { command: 'endtask', description: '🔴 Tắt Antigravity' },
             { command: 'restart', description: '🔄 Restart bot (load code mới)' },
+            { command: 'tunnel', description: '🌐 Mở Cloudflare Tunnel (vd: /tunnel 3000)' },
+            { command: 'tunnellist', description: '📋 Danh sách tunnel đang chạy' },
+            { command: 'stoptunnel', description: '🔴 Tắt tunnel (vd: /stoptunnel 3000)' },
+            { command: 'golive', description: '🔴 Toggle Live Server (Go Live)' },
+            { command: 'runaccept', description: '🚀 Run/Accept (Alt+Enter)' },
         ]);
 
         this.bot.onText(/\/start/, (msg) => this._handleStart(msg));
@@ -99,6 +218,12 @@ class TelegramBotService {
         this.bot.onText(/\/skills/, (msg) => this._handleSkills(msg));
         this.bot.onText(/\/endtask/, (msg) => this._handleEndTask(msg));
         this.bot.onText(/\/restart/, (msg) => this._handleRestart(msg));
+        this.bot.onText(/\/stoptunnel\s*(\d*)/, (msg, match) => this._handleStopTunnel(msg, match));
+        this.bot.onText(/\/tunnellist/, (msg) => this._handleTunnelList(msg));
+        this.bot.onText(/\/tunnel\s+(\d+)/, (msg, match) => this._handleTunnel(msg, match));
+        this.bot.onText(/\/tunnel$/, (msg) => this._handleTunnel(msg, null));
+        this.bot.onText(/\/golive/, (msg) => this._handleGoLive(msg));
+        this.bot.onText(/\/runaccept/, (msg) => this._handleRunAccept(msg));
     }
 
     _isAuthorized(msg) {
@@ -189,6 +314,22 @@ class TelegramBotService {
         }
     }
 
+    async _handleRunAccept(msg) {
+        if (!this._isAuthorized(msg)) return;
+
+        try {
+            await this.sendMessage('🚀 Đang gửi Alt+Enter...');
+            const result = await this.antigravityBridge.sendRunAcceptShortcut();
+            if (result?.success) {
+                await this.sendMessage('✅ Đã gửi lệnh Run/Accept (Alt+Enter)!');
+            } else {
+                await this.sendMessage(`❌ Lỗi gửi lệnh Run/Accept: ${result?.error || 'Unknown error'}`);
+            }
+        } catch (e) {
+            await this.sendMessage(`❌ Run/Accept error: ${e.message}`);
+        }
+    }
+
     async _handleStop(msg) {
         if (!this._isAuthorized(msg)) return;
 
@@ -212,37 +353,52 @@ class TelegramBotService {
         }
 
         // Show inline buttons for model selection
-        if (this.availableModels.length === 0) {
-            await this.sendMessage('⚠️ Chưa cấu hình AVAILABLE_MODELS trong .env');
+        await this.sendMessage('⏳ Đang lấy danh sách model từ Antigravity...');
+        const result = await this.antigravityBridge.getModels();
+
+        if (!result || !result.success || !result.models || result.models.length === 0) {
+            await this.sendMessage('⚠️ Không thể lấy danh sách model hoặc không tìm thấy model nào.');
             return;
         }
 
-        // Build keyboard: 2 buttons per row
+        const models = result.models;
+
+        // Build keyboard: 1 button per row for clarity
+        // Telegram limit 64 bytes for callback_data, we use max 30 chars of the model name
         const keyboard = [];
-        for (let i = 0; i < this.availableModels.length; i += 2) {
-            const row = [{ text: this.availableModels[i], callback_data: `model_${i}` }];
-            if (i + 1 < this.availableModels.length) {
-                row.push({ text: this.availableModels[i + 1], callback_data: `model_${i + 1}` });
-            }
-            keyboard.push(row);
+        for (const m of models) {
+            const marker = m.isActive ? '✅ ' : '';
+            const btnText = `${marker}${m.name}`;
+            const cbData = `model_${m.name.substring(0, 30)}`;
+            keyboard.push([{ text: btnText, callback_data: cbData }]);
         }
 
-        await this.sendMessage('🎨 Chọn model AI:', {
+        // Save available models for name lookup later
+        this.availableModels = models.map(m => m.name);
+
+        const activeModel = models.find(m => m.isActive);
+        const headerText = activeModel
+            ? `🎨 Chọn model AI:\n\n📌 Hiện tại: ${activeModel.name}`
+            : '🎨 Chọn model AI:';
+
+        await this.bot.sendMessage(this.chatId, headerText, {
             reply_markup: { inline_keyboard: keyboard }
         });
     }
 
-    async _switchModel(modelName) {
+    async _switchModel(modelName, silent = false) {
         try {
-            await this.sendMessage(`🎨 Đang đổi sang: ${modelName}...`);
+            if (!silent) await this.sendMessage(`🎨 Đang đổi sang: ${modelName}...`);
             const result = await this.antigravityBridge.changeModel(modelName);
             if (result?.success) {
-                await this.sendMessage(`✅ Đã đổi model: ${result.model || modelName}`);
+                if (!silent) await this.sendMessage(`✅ Đã đổi model: ${result.model || modelName}`);
             } else {
-                await this.sendMessage(`❌ Không tìm thấy model: ${modelName}`);
+                if (!silent) await this.sendMessage(`❌ Không tìm thấy model: ${modelName}`);
             }
+            return result;
         } catch (e) {
-            await this.sendMessage(`❌ Lỗi đổi model: ${e.message}`);
+            if (!silent) await this.sendMessage(`❌ Lỗi đổi model: ${e.message}`);
+            return { success: false, error: e.message };
         }
     }
 
@@ -382,6 +538,167 @@ class TelegramBotService {
     }
 
     // ==========================================
+    // 🌐 CLOUDFLARE TUNNEL (multi-port)
+    // ==========================================
+
+    async _handleTunnel(msg, match) {
+        if (!this._isAuthorized(msg)) return;
+
+        const port = (match && match[1]) ? parseInt(match[1]) : (parseInt(process.env.WS_PORT) || 8000);
+
+        // Already running on this port?
+        const existing = this._tunnels.get(port);
+        if (existing && existing.process && !existing.process.killed) {
+            if (existing.url) {
+                await this.sendMessage(
+                    `🌐 Tunnel port ${port} đang chạy!\n\n` +
+                    `🔗 URL: ${existing.url}\n\n` +
+                    `Dùng /stoptunnel ${port} để tắt.`
+                );
+            } else {
+                await this.sendMessage(`⏳ Tunnel port ${port} đang khởi động, vui lòng chờ...`);
+            }
+            return;
+        }
+
+        try {
+            await this.sendMessage(`🌐 Đang khởi chạy Cloudflare Tunnel cho port ${port}...`);
+
+            const tunnelProcess = spawn('cloudflared', ['tunnel', '--url', `http://localhost:${port}`], {
+                stdio: ['ignore', 'pipe', 'pipe'],
+                windowsHide: true
+            });
+
+            const tunnelState = { process: tunnelProcess, url: null };
+            this._tunnels.set(port, tunnelState);
+
+            let urlFound = false;
+            const urlRegex = /https:\/\/[a-zA-Z0-9\-]+\.trycloudflare\.com/;
+
+            const processOutput = (data) => {
+                if (urlFound) return;
+                const text = data.toString();
+                const urlMatch = text.match(urlRegex);
+                if (urlMatch) {
+                    urlFound = true;
+                    tunnelState.url = urlMatch[0];
+                    console.log(`🌐 Tunnel port ${port} URL: ${tunnelState.url}`);
+                    this.sendMessage(
+                        `✅ Tunnel port ${port} sẵn sàng!\n\n` +
+                        `🔗 URL: ${tunnelState.url}\n\n` +
+                        `Dùng /stoptunnel ${port} để tắt.`
+                    );
+                }
+            };
+
+            tunnelProcess.stdout.on('data', processOutput);
+            tunnelProcess.stderr.on('data', processOutput);
+
+            tunnelProcess.on('error', async (err) => {
+                console.error(`❌ Tunnel port ${port} error:`, err.message);
+                await this.sendMessage(`❌ Lỗi Tunnel port ${port}: ${err.message}\n\nĐảm bảo đã cài cloudflared.`);
+                this._tunnels.delete(port);
+            });
+
+            tunnelProcess.on('exit', (code) => {
+                console.log(`🌐 Tunnel port ${port} exited (code: ${code})`);
+                this._tunnels.delete(port);
+            });
+
+            // Timeout: 15s
+            setTimeout(async () => {
+                if (!urlFound && this._tunnels.has(port)) {
+                    const t = this._tunnels.get(port);
+                    if (t && t.process && !t.process.killed) {
+                        await this.sendMessage(`⚠️ Tunnel port ${port}: không tìm được URL sau 15s.\nDùng /stoptunnel ${port} nếu muốn thử lại.`);
+                    }
+                }
+            }, 15000);
+
+        } catch (e) {
+            await this.sendMessage(`❌ Tunnel error: ${e.message}`);
+            this._tunnels.delete(port);
+        }
+    }
+
+    async _handleTunnelList(msg) {
+        if (!this._isAuthorized(msg)) return;
+
+        if (this._tunnels.size === 0) {
+            await this.sendMessage('📋 Không có tunnel nào đang chạy.');
+            return;
+        }
+
+        let text = `📋 Tunnel đang chạy (${this._tunnels.size}):\n\n`;
+        for (const [port, state] of this._tunnels) {
+            const status = state.url ? `✅ ${state.url}` : '⏳ Đang khởi động...';
+            text += `🔹 Port ${port} → ${status}\n`;
+        }
+        text += `\nDùng /stoptunnel <port> để tắt.`;
+
+        await this.sendMessage(text);
+    }
+
+    async _handleStopTunnel(msg, match) {
+        if (!this._isAuthorized(msg)) return;
+
+        const portArg = (match && match[1]) ? match[1].trim() : '';
+
+        // Stop specific port
+        if (portArg) {
+            const port = parseInt(portArg);
+            const tunnel = this._tunnels.get(port);
+            if (!tunnel || !tunnel.process || tunnel.process.killed) {
+                await this.sendMessage(`⚠️ Không có tunnel nào chạy trên port ${port}.`);
+                return;
+            }
+            try {
+                tunnel.process.kill();
+                this._tunnels.delete(port);
+                await this.sendMessage(`🔴 Đã tắt tunnel port ${port}.`);
+            } catch (e) {
+                await this.sendMessage(`❌ Stop tunnel error: ${e.message}`);
+            }
+            return;
+        }
+
+        // No port specified: stop all
+        if (this._tunnels.size === 0) {
+            await this.sendMessage('⚠️ Không có tunnel nào đang chạy.');
+            return;
+        }
+
+        const count = this._tunnels.size;
+        for (const [port, state] of this._tunnels) {
+            try { state.process.kill(); } catch (e) { /* ignore */ }
+        }
+        this._tunnels.clear();
+        await this.sendMessage(`🔴 Đã tắt tất cả ${count} tunnel.`);
+    }
+
+    // ==========================================
+    // 🔴 GO LIVE (Live Server)
+    // ==========================================
+
+    async _handleGoLive(msg) {
+        if (!this._isAuthorized(msg)) return;
+
+        try {
+            await this.sendMessage('🔴 Đang toggle Go Live...');
+            const result = await this.antigravityBridge.clickGoLive();
+
+            if (result?.success) {
+                const emoji = result.wasLive ? '⏹️' : '▶️';
+                await this.sendMessage(`${emoji} ${result.action} Live Server! (${result.label})`);
+            } else {
+                await this.sendMessage(`❌ ${result?.error || 'Không tìm thấy nút Go Live'}`);
+            }
+        } catch (e) {
+            await this.sendMessage(`❌ Go Live error: ${e.message}`);
+        }
+    }
+
+    // ==========================================
     // 🗂️ NEW FEATURES: Conversations, Open, Skills
     // ==========================================
 
@@ -419,9 +736,10 @@ class TelegramBotService {
             for (const item of pageItems) {
                 const marker = item.isCurrent ? '✅ ' : '';
                 const btnText = `${marker}${item.title} ${item.time ? `(${item.time})` : ''}`.trim();
-                // Use title for matching (truncate to fit Telegram's 64-byte callback_data limit)
-                const cbTitle = item.title.substring(0, 58);
-                keyboard.push([{ text: btnText, callback_data: `conv_${cbTitle}` }]);
+                // Use conversation ID for callback (UUID is 36 chars, fits in 64 byte limit)
+                // Fallback to substring title if ID is missing
+                const cbData = item.id ? item.id : item.title.substring(0, 30);
+                keyboard.push([{ text: btnText, callback_data: `conv_${cbData}` }]);
             }
 
             // Navigation buttons
@@ -507,11 +825,14 @@ class TelegramBotService {
             // 1. Open Current Button
             keyboard.push([{ text: `✅ Mở Project này: ${path.basename(browsePath)}`, callback_data: `open_current` }]);
 
-            // 2. Parent Directory
+            // 2. Parent Directory and Create Folder
             const parent = path.dirname(browsePath);
+            const actionRow = [];
             if (parent !== browsePath) {
-                keyboard.push([{ text: '⬅️ .. (Lên 1 cấp)', callback_data: 'parent_dir' }]);
+                actionRow.push({ text: '⬅️ .. (Lên 1 cấp)', callback_data: 'parent_dir' });
             }
+            actionRow.push({ text: '📁 + Tạo Folder', callback_data: 'new_folder' });
+            keyboard.push(actionRow);
 
             // 3. Subfolders
             for (const folder of currentFolders) {
@@ -767,6 +1088,39 @@ class TelegramBotService {
             // Skip if no text AND no photo
             if (!text && !hasPhoto) return;
 
+            // Handle pending folder name prompt
+            if (this.pendingFolderNamePrompt) {
+                this.pendingFolderNamePrompt = false; // Reset state immediately
+
+                if (text.toLowerCase() === '/cancel') {
+                    await this.sendMessage('Đã hủy tạo thư mục.');
+                    return;
+                }
+
+                // Validate folder name
+                const folderName = text.trim();
+                if (!folderName || /[<>:"/\\|?*]/.test(folderName)) {
+                    await this.sendMessage('❌ Tên thư mục không hợp lệ. Vui lòng thử lại bằng cách bấm nút Tạo Folder.');
+                    return;
+                }
+
+                try {
+                    const parentDir = this.currentBrowsePath || 'C:\\';
+                    const newPath = path.join(parentDir, folderName);
+                    if (fs.existsSync(newPath)) {
+                        await this.sendMessage(`⚠️ Thư mục **${folderName}** đã tồn tại.`, { parse_mode: 'Markdown' });
+                    } else {
+                        fs.mkdirSync(newPath, { recursive: true });
+                        await this.sendMessage(`✅ Đã tạo thư mục: **${folderName}**`, { parse_mode: 'Markdown' });
+                        // Re-open the directory view to show the new folder
+                        await this._handleOpen(msg, null, parentDir, false);
+                    }
+                } catch (e) {
+                    await this.sendMessage(`❌ Lỗi tạo thư mục: ${e.message}`);
+                }
+                return; // Stop processing this message further
+            }
+
             console.log(`📱 Telegram: ${hasPhoto ? '🖼️ Photo' : ''}${text ? ` "${text.substring(0, 50)}..."` : ' (no caption)'}`);
 
             // Reset active response message for new turn
@@ -796,7 +1150,7 @@ class TelegramBotService {
 
                     // Grab baseline text BEFORE sending
                     let baselineText = '';
-                    try { baselineText = await this.antigravityBridge.getLastAIResponse() || ''; } catch (e) { }
+                    try { const _r = await this.antigravityBridge.getLastAIResponse(); baselineText = (typeof _r === 'object' ? _r?.text : _r) || ''; } catch (e) { }
 
                     // Try sending image via CDP
                     let sent = false;
@@ -855,7 +1209,8 @@ class TelegramBotService {
             // Grab baseline text BEFORE sending (to detect new response)
             let baselineText = '';
             try {
-                baselineText = await this.antigravityBridge.getLastAIResponse() || '';
+                const _r = await this.antigravityBridge.getLastAIResponse();
+                baselineText = (typeof _r === 'object' ? _r?.text : _r) || '';
             } catch (e) { /* ignore */ }
 
             try {
@@ -864,6 +1219,17 @@ class TelegramBotService {
 
                 if (this.antigravityBridge.isConnected) {
                     try {
+                        // Capture current response as baseline so BG Monitor doesn't resend old content
+                        try {
+                            const baseline = await this.antigravityBridge.getLastAIResponse();
+                            this._lastMonitoredText = (baseline?.text || '').trim();
+                            this._lastMonitoredThinking = (baseline?.thinking || '').trim();
+                            this._lastMonitoredProgress = (baseline?.taskProgress || '').trim();
+                        } catch (e) { /* ignore */ }
+
+                        this._bgMonitorMsgId = null; // New turn → new message when content changes
+                        this._skipInitialPolls = 0;
+
                         const result = await this.antigravityBridge.injectTextToChat(text);
                         if (result && result.success) {
                             sent = true;
@@ -888,9 +1254,8 @@ class TelegramBotService {
                 }
 
                 if (sent) {
-                    await this.sendMessage('✅ Đã gửi! Đang đợi AI trả lời...');
-                    // Start CDP response polling as fallback
-                    this._pollForResponse(baselineText);
+                    // BG Monitor handles response delivery — no need for extra messages
+                    console.log('✅ Message injected. BG Monitor will detect response.');
                 } else {
                     await this.sendMessage('❌ Không thể gửi tin nhắn. Kiểm tra Antigravity đang chạy?');
                 }
@@ -908,11 +1273,11 @@ class TelegramBotService {
      * Total max: ~15 min wait time
      */
     async _pollForResponse(baselineText) {
-        const FAST_INTERVAL = 3000;   // 3s
-        const SLOW_INTERVAL = 10000;  // 10s
+        const FAST_INTERVAL = 1500;   // 1.5s (was 3s)
+        const SLOW_INTERVAL = 5000;   // 5s (was 10s)
         const FAST_PHASE_MS = 120000; // 2 min fast polling
         const MAX_TOTAL_MS = 900000;  // 15 min total
-        const STABLE_COUNT = 2;       // 2 consecutive same-text = complete
+        const STABLE_COUNT = 1;       // 1 consecutive same-text = complete (was 2)
 
         let pollCount = 0;
         let lastPollText = '';
@@ -947,7 +1312,9 @@ class TelegramBotService {
             }
 
             try {
-                const currentText = await this.antigravityBridge.getLastAIResponse();
+                const _result = await this.antigravityBridge.getLastAIResponse();
+                const currentText = typeof _result === 'object' ? _result?.text : _result;
+                const currentThinking = typeof _result === 'object' ? _result?.thinking : '';
                 if (!currentText) {
                     if (pollCount <= 5) console.log(`🔄 Poll ${pollCount}: no AI text found`);
                 } else if (currentText === baselineText) {
@@ -966,10 +1333,12 @@ class TelegramBotService {
                             return;
                         }
 
-                        console.log(`🤖 CDP Poll: AI response detected (${currentText.length} chars)`);
+                        console.log(`🤖 CDP Poll: AI response detected (${currentText.length} chars, thinking: ${(currentThinking || '').length} chars)`);
                         this.lastSentText = currentText;
-                        const formatted = this._formatTablesForTelegram(currentText);
-                        await this._sendOrEditResponse(`🤖 AI:\n\n${formatted}`);
+                        this._lastMonitoredText = currentText;
+
+                        // Don't send here — BG Monitor handles editing the placeholder
+                        // Just update lastSentText so BG Monitor's next cycle picks it up
                         this.messageLogger?.saveHistory?.('assistant', currentText, null);
                         return;
                     }
@@ -1168,17 +1537,29 @@ ${caption ? `    # Type caption
                     await this.antigravityBridge.stopGeneration();
                     await this.bot.answerCallbackQuery(query.id, { text: '⏹️ Stopped!' });
                 } else if (action.startsWith('model_')) {
-                    // Model selection from inline buttons
-                    const idx = parseInt(action.replace('model_', ''));
-                    const modelName = this.availableModels[idx];
-                    if (modelName) {
-                        await this.bot.answerCallbackQuery(query.id, { text: `🎨 Đổi sang ${modelName}...` });
-                        // Update button to show selected
-                        await this.bot.editMessageText(`🎨 Đã chọn: ${modelName}`, {
+                    const modelNameChunk = action.replace('model_', '');
+
+                    if (modelNameChunk) {
+                        await this.bot.answerCallbackQuery(query.id, { text: `🎨 Đang chuyển model...` });
+                        // Update message while switching
+                        await this.bot.editMessageText(`⏳ Đang chuyển sang: ${modelNameChunk}...`, {
                             chat_id: this.chatId,
                             message_id: query.message.message_id
                         });
-                        await this._switchModel(modelName);
+                        // Use silent mode to avoid duplicate messages
+                        const result = await this._switchModel(modelNameChunk, true);
+                        // Update message with final result
+                        if (result?.success) {
+                            await this.bot.editMessageText(`✅ Đã đổi model: ${result.model || modelNameChunk}`, {
+                                chat_id: this.chatId,
+                                message_id: query.message.message_id
+                            });
+                        } else {
+                            await this.bot.editMessageText(`❌ Không tìm thấy model: ${modelNameChunk}`, {
+                                chat_id: this.chatId,
+                                message_id: query.message.message_id
+                            });
+                        }
                     } else {
                         await this.bot.answerCallbackQuery(query.id, { text: '❌ Model không hợp lệ' });
                     }
@@ -1203,8 +1584,14 @@ ${caption ? `    # Type caption
                     }
                 }
                 // --- Open Project Callbacks ---
-                else if (action.startsWith('dir_') || action.startsWith('open_') || action === 'parent_dir' || action.startsWith('dirpage_')) {
-                    if (action.startsWith('dirpage_')) {
+                else if (action === 'new_folder' || action.startsWith('dir_') || action.startsWith('open_') || action === 'parent_dir' || action.startsWith('dirpage_')) {
+                    if (action === 'new_folder') {
+                        // Prompt user to type the new folder name
+                        this.pendingFolderNamePrompt = true; // Set state
+                        await this.bot.answerCallbackQuery(query.id);
+                        await this.bot.sendMessage(this.chatId, `📁 **Tạo Folder mới**\n\nTrong thư mục hiện tại:\n\`${this.currentBrowsePath}\`\n\n👉 Vui lòng gõ tên thư mục muốn tạo (hoặc gửi /cancel để hủy):`, { parse_mode: 'Markdown' });
+                    }
+                    else if (action.startsWith('dirpage_')) {
                         const page = parseInt(action.replace('dirpage_', ''));
                         // Use currentBrowsePath implicitly by passing null
                         await this._handleOpen(query.message, null, null, true, page);
@@ -1284,6 +1671,23 @@ ${caption ? `    # Type caption
                     const [folder, filename] = action.replace('skill_file_', '').split('|');
                     if (folder && filename) {
                         await this._executeSkillFile(folder, filename, query.id);
+                    }
+                }
+                // --- Conversation Callbacks ---
+                else if (action.startsWith('conv_page_')) {
+                    const page = parseInt(action.replace('conv_page_', '')) || 0;
+                    await this._handleConversations(query, page, true);
+                    await this.bot.answerCallbackQuery(query.id);
+                }
+                else if (action.startsWith('conv_')) {
+                    // Switch to conversation by title snippet
+                    const titleSnippet = action.replace('conv_', '');
+                    await this.bot.answerCallbackQuery(query.id, { text: `🔄 Đang chuyển...` });
+                    const result = await this.antigravityBridge.switchConversation(titleSnippet);
+                    if (result?.success) {
+                        await this.sendMessage(`✅ Đã chuyển sang: "${titleSnippet}"`);
+                    } else {
+                        await this.sendMessage(`❌ Chuyển thất bại: ${result?.error || 'không tìm thấy'}`);
                     }
                 }
                 else {

@@ -8,6 +8,8 @@ class EventBus {
         this.wss = wss;
         // Map: sessionId -> Set<WebSocket>
         this.clients = new Map();
+        // Map: type -> Set<callback> for internal (non-WS) listeners
+        this.broadcastListeners = new Map();
     }
 
     /**
@@ -69,9 +71,29 @@ class EventBus {
      * Broadcast to all sessions
      */
     broadcast(type, data) {
+        // Send to WebSocket clients
         this.clients.forEach((_, sessionId) => {
             this.emit(sessionId, type, data);
         });
+        // Call internal listeners (e.g. Telegram bot)
+        const listeners = this.broadcastListeners.get(type);
+        if (listeners) {
+            listeners.forEach(cb => {
+                try { cb(data); } catch (e) { console.error(`EventBus listener error [${type}]:`, e.message); }
+            });
+        }
+    }
+
+    /**
+     * Register an internal listener for broadcast events
+     * @param {string} type - Event type to listen for
+     * @param {function} callback - Callback receiving (data)
+     */
+    onBroadcast(type, callback) {
+        if (!this.broadcastListeners.has(type)) {
+            this.broadcastListeners.set(type, new Set());
+        }
+        this.broadcastListeners.get(type).add(callback);
     }
 
     /**

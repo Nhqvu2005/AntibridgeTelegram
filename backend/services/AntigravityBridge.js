@@ -229,6 +229,27 @@ class AntigravityBridge {
         }
     }
 
+    /**
+     * Gửi Run/Accept Shortcut (Alt+Enter) qua CDP
+     */
+    async sendRunAcceptShortcut() {
+        if (!this.page) return { success: false, error: 'Not connected to Antigravity' };
+
+        try {
+            console.log('⌨️ CDP: Sending Run/Accept Shortcut (Alt+Enter)...');
+
+            await this.page.keyboard.down('Alt');
+            await this.page.keyboard.press('Enter');
+            await this.page.keyboard.up('Alt');
+
+            console.log('✅ CDP: Run/Accept Shortcut Sent!');
+            return { success: true };
+        } catch (e) {
+            console.error('❌ CDP Run/Accept Shortcut Error:', e.message);
+            return { success: false, error: e.message };
+        }
+    }
+
     // ============================================================
     // 🚀 CDP CLICK FUNCTIONS (v3.0.0 - Non-Extension)
     // Các function này KHÔNG cần Extension, click trực tiếp vào DOM
@@ -409,37 +430,44 @@ class AntigravityBridge {
         try {
             console.log('⏹️ CDP: Stopping generation...');
 
-            const frames = this.page.frames();
+            const stopSelectors = [
+                '[data-tooltip-id="input-send-button-cancel-tooltip"]',
+                '.bg-red-500.rounded-xs',
+                'div.bg-red-500',
+                '[aria-label*="Stop" i]',
+                '[aria-label*="Cancel" i]',
+                '[title*="Stop" i]',
+                'button[class*="stop" i]',
+                '.stop-button',
+                '[data-action="stop"]',
+                '[data-action="cancel"]'
+            ];
 
-            for (const frame of frames) {
-                const frameUrl = frame.url();
-                if (!frameUrl || frameUrl === 'about:blank') continue;
+            // Try cachedChatFrame first, then scan all pages
+            const framesToTry = [];
+            if (this.cachedChatFrame) framesToTry.push(this.cachedChatFrame);
 
-                if (!frameUrl.includes('cascade-panel') &&
-                    !frameUrl.includes('agentPanel') &&
-                    !frameUrl.includes('webview') &&
-                    !frameUrl.includes('extension')) {
-                    continue;
-                }
-
+            // Add all frames from all browser pages
+            let allPages = [];
+            if (this.browser) {
+                try { allPages = await this.browser.pages(); } catch (e) { if (this.page) allPages = [this.page]; }
+            } else if (this.page) {
+                allPages = [this.page];
+            }
+            for (const pg of allPages) {
                 try {
-                    // Tìm Stop button - Antigravity specific selectors first
-                    const stopSelectors = [
-                        // Antigravity Cancel button (red square)
-                        '[data-tooltip-id="input-send-button-cancel-tooltip"]',
-                        '.bg-red-500.rounded-xs',
-                        'div.bg-red-500',
-                        // Generic selectors
-                        'button:has-text("Stop")',
-                        '[aria-label*="Stop" i]',
-                        '[aria-label*="Cancel" i]',
-                        '[title*="Stop" i]',
-                        'button[class*="stop" i]',
-                        '.stop-button',
-                        '[data-action="stop"]',
-                        '[data-action="cancel"]'
-                    ];
+                    const pgUrl = pg.url();
+                    if (!pgUrl || pgUrl.includes('about:blank') || pgUrl.includes('devtools')) continue;
+                    const frames = pg.frames();
+                    for (const f of frames) {
+                        if (!framesToTry.includes(f)) framesToTry.push(f);
+                    }
+                } catch (e) { }
+            }
 
+            for (const frame of framesToTry) {
+                try {
+                    // Try CSS selectors
                     let stopBtn = null;
                     for (const sel of stopSelectors) {
                         try {
@@ -451,7 +479,7 @@ class AntigravityBridge {
                         } catch (e) { }
                     }
 
-                    // Fallback: tìm bằng text/icon
+                    // Fallback: find by text
                     if (!stopBtn) {
                         stopBtn = await frame.evaluateHandle(() => {
                             const buttons = document.querySelectorAll('button, [role="button"]');
@@ -480,21 +508,15 @@ class AntigravityBridge {
                 } catch (e) { }
             }
 
-            // Fallback 1: Gửi phím Escape vào frame đang active
-            console.log('⚠️ CDP: Stop button not found, trying Escape in frames...');
-
-            for (const frame of frames) {
+            // Fallback 1: Send Escape to cachedChatFrame
+            console.log('⚠️ CDP: Stop button not found, trying Escape...');
+            const escFrame = this.cachedChatFrame || this.page;
+            if (escFrame) {
                 try {
-                    const frameUrl = frame.url();
-                    if (!frameUrl || frameUrl === 'about:blank') continue;
-
-                    // Click vào frame để focus
-                    await frame.click('body').catch(() => { });
+                    await escFrame.click('body').catch(() => { });
                     await new Promise(r => setTimeout(r, 100));
-
-                    // Gửi Escape
                     await this.page.keyboard.press('Escape');
-                    console.log(`✅ CDP: Escape sent to frame: ${frameUrl.substring(0, 50)}...`);
+                    console.log('✅ CDP: Escape sent to chat frame');
                 } catch (e) { }
             }
 
@@ -518,6 +540,147 @@ class AntigravityBridge {
 
         } catch (e) {
             console.error('❌ CDP Stop Generation Error:', e.message);
+            return { success: false, error: e.message };
+        }
+    }
+
+    /**
+     * 🗂️ Get Conversation List from sidebar buttons
+     * Reads the sidebar conversation list (button[title] with hover:bg-gray-500/10 class)
+     */
+    async getConversations() {
+        if (!this.page) return { success: false, error: 'Not connected to Antigravity' };
+
+        try {
+            console.log('🗂️ CDP: Getting conversation list from sidebar...');
+
+            const extractFromFrame = async (frame) => {
+                try {
+                    return await frame.evaluate(() => {
+                        // Sidebar conversation buttons: button[title] with hover:bg-gray-500/10
+                        const buttons = document.querySelectorAll('button[title].group');
+                        const convs = [];
+                        for (const btn of buttons) {
+                            const title = btn.getAttribute('title');
+                            if (!title || title.length < 2) continue;
+                            // Skip buttons that are not conversation items (e.g., toolbar buttons)
+                            if (!btn.classList.contains('grow')) continue;
+
+                            // Get time text (e.g. "4m", "1 day ago")
+                            const timeParagraph = btn.querySelector('p.text-nowrap');
+                            const time = timeParagraph ? timeParagraph.textContent.trim() : '';
+
+                            // Get conversation ID from delete button's data-tooltip-id
+                            // Pattern: "{conversationId}-delete-conversation"
+                            const deleteBtn = btn.querySelector('[data-tooltip-id$="-delete-conversation"]');
+                            const tooltipId = deleteBtn ? deleteBtn.getAttribute('data-tooltip-id') : '';
+                            const convId = tooltipId ? tooltipId.replace('-delete-conversation', '') : '';
+
+                            // Check if this is the current conversation (active styling)
+                            const isCurrent = btn.classList.contains('bg-list-active-selection-background') ||
+                                btn.getAttribute('aria-selected') === 'true' ||
+                                btn.style.backgroundColor !== '';
+
+                            convs.push({ title, time, id: convId, isCurrent });
+                        }
+                        return convs;
+                    });
+                } catch (e) { return null; }
+            };
+
+            // Try cachedChatFrame first, then scan all pages/frames
+            let convs = null;
+            if (this.cachedChatFrame) {
+                convs = await extractFromFrame(this.cachedChatFrame);
+            }
+            if (!convs || convs.length === 0) {
+                let allPages = [];
+                try { allPages = await this.browser.pages(); } catch (e) { allPages = [this.page]; }
+                for (const pg of allPages) {
+                    for (const frame of pg.frames()) {
+                        try {
+                            const result = await extractFromFrame(frame);
+                            if (result && result.length > 0) { convs = result; break; }
+                        } catch (e) { }
+                    }
+                    if (convs && convs.length > 0) break;
+                }
+            }
+
+            if (!convs || convs.length === 0) {
+                return { success: false, error: 'Không tìm thấy cuộc trò chuyện nào trong sidebar' };
+            }
+
+            console.log(`🗂️ CDP: Found ${convs.length} conversations`);
+            return { success: true, data: convs };
+
+        } catch (e) {
+            console.error('❌ CDP getConversations Error:', e.message);
+            return { success: false, error: e.message };
+        }
+    }
+
+    /**
+     * 🔄 Switch to a conversation by clicking its sidebar button
+     */
+    async switchConversation(titleSnippet) {
+        if (!this.page) return { success: false, error: 'Not connected to Antigravity' };
+
+        try {
+            console.log(`🔄 CDP: Switching to conversation matching: "${titleSnippet}"`);
+
+            const clickInFrame = async (frame) => {
+                try {
+                    return await frame.evaluate((snippet) => {
+                        const buttons = document.querySelectorAll('button[title].group');
+                        for (const btn of buttons) {
+                            if (!btn.classList.contains('grow')) continue;
+                            const title = btn.getAttribute('title') || '';
+
+                            // Get ID from delete button
+                            const deleteBtn = btn.querySelector('[data-tooltip-id$="-delete-conversation"]');
+                            const tooltipId = deleteBtn ? deleteBtn.getAttribute('data-tooltip-id') : '';
+                            const id = tooltipId ? tooltipId.replace('-delete-conversation', '') : '';
+
+                            // Match either exactly by ID or sub-match by title
+                            if (id === snippet || title.toLowerCase().includes(snippet.toLowerCase())) {
+                                btn.click();
+                                return { found: true, title };
+                            }
+                        }
+                        return { found: false };
+                    }, titleSnippet);
+                } catch (e) { return null; }
+            };
+
+            // Try cachedChatFrame first
+            let result = null;
+            if (this.cachedChatFrame) {
+                result = await clickInFrame(this.cachedChatFrame);
+            }
+            if (!result?.found) {
+                let allPages = [];
+                try { allPages = await this.browser.pages(); } catch (e) { allPages = [this.page]; }
+                for (const pg of allPages) {
+                    for (const frame of pg.frames()) {
+                        try {
+                            const r = await clickInFrame(frame);
+                            if (r?.found) { result = r; break; }
+                        } catch (e) { }
+                    }
+                    if (result?.found) break;
+                }
+            }
+
+            if (!result?.found) {
+                return { success: false, error: `Không tìm thấy conversation chứa: "${titleSnippet}"` };
+            }
+
+            console.log(`✅ CDP: Switched to conversation: "${result.title}"`);
+            return { success: true, title: result.title };
+
+        } catch (e) {
+            console.error('❌ CDP switchConversation Error:', e.message);
             return { success: false, error: e.message };
         }
     }
@@ -593,143 +756,254 @@ class AntigravityBridge {
     async getLastAIResponse() {
         if (!this.browser && !this.page) return null;
 
-        try {
-            let allPages = [];
-            if (this.browser) {
-                try {
-                    allPages = await this.browser.pages();
-                } catch (e) {
-                    if (this.page) allPages = [this.page];
+        // Helper: evaluate extraction logic in a single frame
+        const extractFromFrame = async (frame) => {
+            return frame.evaluate(() => {
+                // Convert tables to blocks
+                function htmlTableToBlocks(tableEl) {
+                    const rows = [];
+                    for (const tr of tableEl.querySelectorAll('tr')) {
+                        const cells = [];
+                        for (const td of tr.querySelectorAll('th, td')) {
+                            cells.push((td.innerText || '').trim());
+                        }
+                        rows.push(cells);
+                    }
+                    if (rows.length === 0) return '';
+                    const headers = rows[0];
+                    const dataRows = rows.slice(1);
+                    if (dataRows.length === 0) return headers.join(' | ');
+                    const blocks = [];
+                    for (const row of dataRows) {
+                        const lines = [];
+                        for (let i = 0; i < row.length; i++) {
+                            const label = headers[i] || 'Col' + (i + 1);
+                            const value = row[i] || '';
+                            if (value) lines.push('  ' + label + ': ' + value);
+                        }
+                        if (lines.length > 0) {
+                            blocks.push('\ud83d\udccc ' + (row[0] || '') + '\n' + lines.slice(1).join('\n'));
+                        }
+                    }
+                    return blocks.join('\n\n');
                 }
-            } else if (this.page) {
-                allPages = [this.page];
-            }
 
+                function elementToText(container) {
+                    const clone = container.cloneNode(true);
+                    clone.querySelectorAll('script, style, .thinking-content').forEach(n => n.remove());
+                    const tables = clone.querySelectorAll('table');
+                    tables.forEach(table => {
+                        const textBlocks = htmlTableToBlocks(table);
+                        const pre = document.createElement('pre');
+                        pre.textContent = textBlocks;
+                        table.replaceWith(pre);
+                    });
+                    return (clone.innerText || '').trim();
+                }
+
+                // Capture thinking, task progress, and response SEPARATELY
+                let thinkingText = '';
+                let taskProgressText = ''; // only the LAST task progress
+                let responseText = '';
+                let responseHtml = '';
+                const allBlocks = document.querySelectorAll('.leading-relaxed.select-text');
+                const blockCount = allBlocks.length;
+
+                for (const block of allBlocks) {
+                    const cls = block.className || '';
+
+                    if (cls.includes('opacity-70')) {
+                        // Thinking block
+                        const clone = block.cloneNode(true);
+                        clone.querySelectorAll('script, style').forEach(n => n.remove());
+                        thinkingText = (clone.innerText || '').trim();
+                    } else if (block.closest('.isolate')) {
+                        // Inside task boundary — skip here, we capture full container below
+                    } else {
+                        // Main response — overwrite = LAST one only
+                        responseText = elementToText(block);
+                        responseHtml = block.innerHTML;
+                    }
+                }
+
+                // Capture task boundary info with TARGETED extraction (avoids CSS/canvas noise)
+                const isolateContainers = document.querySelectorAll('.isolate.mb-2');
+                const progressParts = [];
+                for (const container of isolateContainers) {
+                    const parts = [];
+                    // 1) Task Name
+                    const taskName = container.querySelector('.font-semibold');
+                    if (taskName) parts.push('📌 ' + taskName.textContent.trim());
+
+                    // 2) Task Summary (first paragraph in the header area)
+                    const headerArea = container.querySelector('.flex.flex-col');
+                    if (headerArea) {
+                        const summaryP = headerArea.querySelector('p');
+                        if (summaryP) parts.push(summaryP.textContent.trim());
+                    }
+
+                    // 3) Progress step statuses + command outputs
+                    const progressArea = container.querySelector('[class*="overflow-y-auto"]');
+                    if (progressArea) {
+                        // Get numbered step headers
+                        const stepHeaders = progressArea.querySelectorAll('.sticky');
+                        for (const header of stepHeaders) {
+                            const stepNum = header.querySelector('.text-xs');
+                            const stepText = header.querySelector('p');
+                            if (stepNum && stepText) {
+                                parts.push('  [' + stepNum.textContent.trim() + '] ' + stepText.textContent.trim());
+                            }
+                        }
+                        // Get command outputs from pre tags (not xterm canvas)
+                        const outputs = progressArea.querySelectorAll('pre > div, pre.whitespace-pre-wrap > div');
+                        for (const out of outputs) {
+                            const text = (out.textContent || '').trim();
+                            if (text.length > 5 && text.length < 500) {
+                                parts.push('  > ' + text.replace(/\n/g, '\n  > '));
+                            }
+                        }
+                    }
+
+                    if (parts.length > 0) {
+                        progressParts.push(parts.join('\n'));
+                    }
+                }
+                if (progressParts.length > 0) {
+                    taskProgressText = progressParts.join('\n\n---\n\n');
+                }
+
+                // Return all 3 fields separately
+                if (responseText.length >= 10 || taskProgressText.length >= 10 || thinkingText.length >= 10) {
+                    return {
+                        text: responseText,
+                        rawHtml: responseHtml,
+                        thinking: thinkingText,
+                        taskProgress: taskProgressText,
+                        strategy: responseText.length >= 10 ? 'response' : (taskProgressText.length >= 10 ? 'task-progress' : 'thinking'),
+                        blockCount
+                    };
+                }
+
+                // Fallback: .notify-user-container
+                const notifyContainers = document.querySelectorAll('.notify-user-container');
+                if (notifyContainers.length > 0) {
+                    const last = notifyContainers[notifyContainers.length - 1];
+                    const text = elementToText(last);
+                    const rawHtml = last.innerHTML;
+                    if (text.length >= 10) return { text, rawHtml, thinking: thinkingText, taskProgress: taskProgressText, strategy: 'notify', blockCount };
+                }
+
+                return { blockCount, noMatch: true };
+            }).catch(e => ({ error: e.message }));
+        };
+
+        try {
             let bestText = '';
             let bestLen = 0;
+            let bestThinking = '';
+            let bestProgress = '';
+            let bestResult = null;
 
-            for (const pg of allPages) {
+            // Helper: check if a result has ANY useful content
+            const resultScore = (r) => {
+                if (!r) return 0;
+                return (r.text || '').length + (r.taskProgress || '').length + (r.thinking || '').length;
+            };
+
+            // ===== PRIORITY 1: Use cachedChatFrame (already confirmed to contain chat) =====
+            if (this.cachedChatFrame) {
                 try {
-                    const pgUrl = pg.url();
-                    if (!pgUrl || pgUrl.includes('about:blank') || pgUrl.includes('devtools')) continue;
-
-                    const frames = pg.frames();
-                    for (const frame of frames) {
-                        try {
-                            const frameUrl = frame.url();
-                            if (!frameUrl || frameUrl === 'about:blank') continue;
-
-                            const result = await frame.evaluate(() => {
-                                // ===== Helper: Convert HTML tables to block format =====
-                                function htmlTableToBlocks(tableEl) {
-                                    const rows = [];
-                                    for (const tr of tableEl.querySelectorAll('tr')) {
-                                        const cells = [];
-                                        for (const td of tr.querySelectorAll('th, td')) {
-                                            cells.push((td.innerText || '').trim());
-                                        }
-                                        rows.push(cells);
-                                    }
-                                    if (rows.length === 0) return '';
-
-                                    const headers = rows[0];
-                                    const dataRows = rows.slice(1);
-                                    if (dataRows.length === 0) return headers.join(' | ');
-
-                                    // Block format: each row = block with header labels
-                                    const blocks = [];
-                                    for (const row of dataRows) {
-                                        const lines = [];
-                                        for (let i = 0; i < row.length; i++) {
-                                            const label = headers[i] || 'Col' + (i + 1);
-                                            const value = row[i] || '';
-                                            if (value) lines.push('  ' + label + ': ' + value);
-                                        }
-                                        if (lines.length > 0) {
-                                            blocks.push('\ud83d\udccc ' + (row[0] || '') + '\n' + lines.slice(1).join('\n'));
-                                        }
-                                    }
-                                    return blocks.join('\n\n');
-                                }
-
-                                // ===== Helper: Convert element to text preserving structure =====
-                                function elementToText(container) {
-                                    const clone = container.cloneNode(true);
-                                    clone.querySelectorAll('script, style, .thinking-content').forEach(n => n.remove());
-
-                                    // Convert tables to block format before extracting innerText
-                                    const tables = clone.querySelectorAll('table');
-                                    tables.forEach(table => {
-                                        const textBlocks = htmlTableToBlocks(table);
-                                        const pre = document.createElement('pre');
-                                        pre.textContent = textBlocks;
-                                        table.replaceWith(pre);
-                                    });
-
-                                    return (clone.innerText || '').trim();
-                                }
-
-                                // Strategy 1: .notify-user-container (specific)
-                                const notifyContainers = document.querySelectorAll('.notify-user-container');
-                                if (notifyContainers.length > 0) {
-                                    const last = notifyContainers[notifyContainers.length - 1];
-                                    const text = elementToText(last);
-                                    const rawHtml = last.innerHTML;
-                                    if (text.length >= 10) return { text, rawHtml, strategy: 'notify' };
-                                }
-
-                                // Strategy 2: Regular AI responses (prose blocks)
-                                const proseContainers = document.querySelectorAll(
-                                    'div[class~="prose"][class*="prose-sm"]'
-                                );
-                                if (proseContainers.length > 0) {
-                                    const last = proseContainers[proseContainers.length - 1];
-                                    const text = elementToText(last);
-                                    const rawHtml = last.innerHTML;
-                                    if (text.length >= 10) return { text, rawHtml, strategy: 'prose' };
-                                }
-
-                                return null;
-                            }).catch(() => null);
-
-                            if (result && result.text && result.text.length > bestLen && result.text.length >= 10) {
-                                bestLen = result.text.length;
-                                bestText = result.text;
-
-                                // Dump raw HTML to debug file for table analysis
-                                if (result.rawHtml) {
-                                    try {
-                                        const fs = require('fs');
-                                        const path = require('path');
-                                        const debugDir = path.join(__dirname, '../../Data');
-                                        if (!fs.existsSync(debugDir)) fs.mkdirSync(debugDir, { recursive: true });
-                                        const debugFile = path.join(debugDir, 'debug_response_html.txt');
-                                        const debugContent = [
-                                            `=== DEBUG: AI Response HTML ===`,
-                                            `Timestamp: ${new Date().toISOString()}`,
-                                            `Strategy: ${result.strategy}`,
-                                            `Text length: ${result.text.length}`,
-                                            `HTML length: ${result.rawHtml.length}`,
-                                            ``,
-                                            `=== RAW HTML ===`,
-                                            result.rawHtml,
-                                            ``,
-                                            `=== EXTRACTED TEXT ===`,
-                                            result.text,
-                                        ].join('\n');
-                                        fs.writeFileSync(debugFile, debugContent, 'utf8');
-                                        console.log(`📄 Debug HTML dumped to: ${debugFile}`);
-                                    } catch (dumpErr) {
-                                        console.log(`⚠️ Debug dump failed: ${dumpErr.message}`);
-                                    }
-                                }
-                            }
-                        } catch (e) { /* skip */ }
+                    const result = await extractFromFrame(this.cachedChatFrame);
+                    const score = resultScore(result);
+                    if (score >= 10) {
+                        console.log(`📖 getLastAI: Found via cachedChatFrame! strategy=${result.strategy}, text=${(result.text || '').length}, progress=${(result.taskProgress || '').length}, thinking=${(result.thinking || '').length}`);
+                        bestText = result.text || '';
+                        bestThinking = result.thinking || '';
+                        bestProgress = result.taskProgress || '';
+                        bestLen = score;
+                        bestResult = result;
+                    } else {
+                        console.log(`📖 getLastAI: cachedChatFrame returned: blocks=${result?.blockCount}, noMatch=${result?.noMatch}, error=${result?.error || 'none'}`);
                     }
-                } catch (e) { /* skip */ }
+                } catch (e) {
+                    console.log(`📖 getLastAI: cachedChatFrame failed: ${e.message}`);
+                }
             }
 
-            if (bestText) return bestText;
+            // ===== PRIORITY 2: Scan all pages/frames =====
+            if (bestLen < 10) {
+                let allPages = [];
+                if (this.browser) {
+                    try { allPages = await this.browser.pages(); } catch (e) { if (this.page) allPages = [this.page]; }
+                } else if (this.page) {
+                    allPages = [this.page];
+                }
+
+                for (const pg of allPages) {
+                    try {
+                        const pgUrl = pg.url();
+                        if (!pgUrl || pgUrl.includes('about:blank') || pgUrl.includes('devtools')) continue;
+
+                        const frames = pg.frames();
+                        for (const frame of frames) {
+                            try {
+                                const frameUrl = frame.url();
+                                if (!frameUrl || frameUrl === 'about:blank') continue;
+
+                                const result = await extractFromFrame(frame);
+                                const score = resultScore(result);
+                                if (score > bestLen && score >= 10) {
+                                    bestLen = score;
+                                    bestText = result.text || '';
+                                    bestThinking = result.thinking || '';
+                                    bestProgress = result.taskProgress || '';
+                                    bestResult = result;
+                                }
+                            } catch (e) { /* skip frame */ }
+                        }
+                    } catch (e) { /* skip page */ }
+                }
+
+                if (bestResult) {
+                    console.log(`📖 getLastAI: Found via scan! strategy=${bestResult.strategy}, text=${bestText.length}, progress=${bestProgress.length}, thinking=${bestThinking.length}`);
+                }
+            }
+
+            // ===== Dump debug and return =====
+            if (bestResult) {
+                try {
+                    const fs = require('fs');
+                    const path = require('path');
+                    const debugDir = path.join(__dirname, '../../Data');
+                    if (!fs.existsSync(debugDir)) fs.mkdirSync(debugDir, { recursive: true });
+                    const debugFile = path.join(debugDir, 'debug_response_html.txt');
+                    const debugContent = [
+                        `=== DEBUG: AI Response HTML ===`,
+                        `Timestamp: ${new Date().toISOString()}`,
+                        `Strategy: ${bestResult.strategy}`,
+                        `Text length: ${bestText.length}`,
+                        `TaskProgress length: ${bestProgress.length}`,
+                        `Thinking length: ${bestThinking.length}`,
+                        ``,
+                        `=== THINKING ===`,
+                        bestThinking || '(none)',
+                        ``,
+                        `=== TASK PROGRESS ===`,
+                        bestProgress || '(none)',
+                        ``,
+                        `=== EXTRACTED TEXT ===`,
+                        bestText || '(none)',
+                    ].join('\n');
+                    fs.writeFileSync(debugFile, debugContent, 'utf8');
+                    console.log(`📄 Debug HTML dumped to: ${debugFile}`);
+                } catch (dumpErr) {
+                    console.log(`⚠️ Debug dump failed: ${dumpErr.message}`);
+                }
+
+                return { text: bestText, thinking: bestThinking, taskProgress: bestProgress };
+            }
+
+            return null;
 
         } catch (e) {
             console.error('❌ getLastAIResponse error:', e.message);
@@ -884,242 +1158,6 @@ class AntigravityBridge {
     // 🗂️ CONVERSATION & PROJECT MANAGEMENT (v3.1.0)
     // ============================================================
 
-    /**
-     * 📂 Lấy danh sách cuộc trò chuyện (Conversations)
-     * Parse từ Sidebar History List
-     */
-    async getConversations() {
-        if (!this.page) return { success: false, error: 'Not connected' };
-
-        try {
-            console.log('📂 CDP: Getting conversation list...');
-
-            // 1. Ensure history list is open — scan ALL frames since button is in webview
-            const checkSelector = () => {
-                const btn = document.querySelector('[data-tooltip-id="history-tooltip"]') ||
-                    document.querySelector('[data-past-conversations-toggle="true"]');
-                return {
-                    found: !!btn,
-                    tag: btn?.tagName,
-                    classes: btn?.className?.substring(0, 60)
-                };
-            };
-
-            let historyFrame = null; // Remember which frame has the button
-
-            // Check main page first
-            let btnDebug = await this.page.evaluate(checkSelector);
-            console.log('🔍 History Toggle Debug (main):', JSON.stringify(btnDebug));
-
-            if (!btnDebug.found) {
-                // Search in frames
-                const frames = this.page.frames();
-                console.log(`🔍 Searching ${frames.length} frames for history toggle...`);
-                for (const frame of frames) {
-                    try {
-                        const result = await frame.evaluate(checkSelector);
-                        const frameUrl = frame.url()?.substring(0, 60) || 'unknown';
-                        console.log(`   Frame [${frameUrl}]: found=${result.found}`);
-                        if (result.found) {
-                            btnDebug = result;
-                            historyFrame = frame;
-                            console.log(`   ✅ Found toggle in frame: ${frameUrl}`);
-                            break;
-                        }
-                    } catch (e) { /* skip inaccessible frames */ }
-                }
-            }
-
-            // Click the toggle if found (in the correct frame)
-            const targetContext = historyFrame || this.page;
-            if (btnDebug.found) {
-                await targetContext.evaluate(() => {
-                    const btn = document.querySelector('[data-tooltip-id="history-tooltip"]') ||
-                        document.querySelector('[data-past-conversations-toggle="true"]');
-                    if (btn) {
-                        btn.click();
-                        btn.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
-                    }
-                });
-                console.log('🔍 Clicked history toggle!');
-            } else {
-                console.log('⚠️ History toggle NOT found in any frame!');
-            }
-
-            // Wait for list animation
-            await new Promise(r => setTimeout(r, 500));
-
-            // Try to find history toggle and click it if needed
-            // But we don't want to close it if it's open.
-            // Best strategy: Check if items exist. If not, click toggle and check again.
-
-            // Defines helper to run in browser context
-            const scanDOM = () => {
-                const list = [];
-
-                // 1. Find Current Conversation
-                // Look for the specific background class for focus/selected item
-                const currentEl = document.querySelector('[class*="bg-quickinput-list-focusBackground"]');
-                if (currentEl) {
-                    let title = 'Current Conversation';
-
-                    // Try innerText first
-                    const rawText = currentEl.innerText || '';
-                    const parts = rawText.split('\n').map(s => s.trim()).filter(s => s);
-
-                    if (parts.length > 0) title = parts[0];
-
-                    // Fallback: try selector if innerText is weird
-                    const titleSpan = currentEl.querySelector('span.text-sm span');
-                    if (titleSpan && titleSpan.textContent) title = titleSpan.textContent;
-
-                    list.push({ title: title.trim(), isCurrent: true, index: 0 });
-                }
-
-                // 2. Find Other Conversations
-                const nodes = document.querySelectorAll('[class*="hover:bg-list-hover"]');
-                nodes.forEach((el, idx) => {
-                    // Skip current
-                    if (el.classList.contains('bg-quickinput-list-focusBackground')) return;
-
-                    let title = 'Conversation ' + (idx + 1);
-                    let time = '';
-
-                    const rawText = el.innerText || '';
-                    const parts = rawText.split('\n').map(s => s.trim()).filter(s => s);
-
-                    if (parts.length > 0) title = parts[0];
-                    if (parts.length > 1) time = parts[parts.length - 1];
-
-                    // Fallback selectors
-                    const spans = el.querySelectorAll('span');
-                    if (title.startsWith('Conversation') && spans.length > 0) {
-                        const tSpan = el.querySelector('span.text-sm span');
-                        if (tSpan) title = tSpan.textContent;
-                        else title = spans[0].textContent;
-                    }
-
-                    list.push({
-                        title: title.trim(),
-                        time: time.trim() || '',
-                        isCurrent: false,
-                        index: list.length // continue index
-                    });
-                });
-                return list;
-            };
-
-            // 1. Try Main Frame & All Frames
-            const frames = this.page.frames();
-            let allItems = [];
-
-            // Check main frame first
-            allItems = await this.page.evaluate(scanDOM);
-
-            // If found, return
-            if (allItems.length > 0) return { success: true, data: allItems };
-
-            // If not found, check other frames
-            for (const frame of frames) {
-                try {
-                    const items = await frame.evaluate(scanDOM);
-                    if (items && items.length > 0) {
-                        return { success: true, data: items };
-                    }
-                } catch (e) { /* ignore navigation errors in frames */ }
-            }
-
-            // 2. If STILL no items, try Toggle Button (in main page preferably)
-            const toggled = await this.page.evaluate(async () => {
-                // Try selector suggested by user + fallback
-                const toggleBtn = document.querySelector('[data-tooltip-id="history-tooltip"]') ||
-                    document.querySelector('[data-past-conversations-toggle="true"]');
-
-                if (toggleBtn) {
-                    console.log('🔄 Toggling history (found btn)...');
-                    toggleBtn.click();
-                    // Dispatch events just in case
-                    toggleBtn.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
-
-                    // Helper to wait
-                    await new Promise(r => setTimeout(r, 800));
-                    return true;
-                }
-                return false;
-            });
-
-            if (toggled) {
-                // Scan again after toggle
-                allItems = await this.page.evaluate(scanDOM);
-                return { success: true, data: allItems };
-            }
-
-            return { success: true, data: [] };
-
-        } catch (e) {
-            console.error('❌ CDP Get Conversations Error:', e.message);
-            return { success: false, error: e.message };
-        }
-    }
-
-    /**
-     * 🔄 Chuyển cuộc trò chuyện
-     * @param {string|number} target - Title hoặc Index của conversation
-     */
-    async switchConversation(target) {
-        if (!this.page) return { success: false, error: 'Not connected' };
-
-        try {
-            console.log(`🔄 CDP: Switching conversation to "${target}"...`);
-
-            // Ensure list is open first
-            await this.getConversations();
-
-            // Click item
-            const found = await this.page.evaluate((targetVal) => {
-                // Determine mechanism: by index or text
-                const isIndex = typeof targetVal === 'number';
-
-                // Collect ALL conversation items (current + others)
-                // Current conversation uses bg-quickinput-list-focusBackground (no hover:bg-list-hover)
-                // Other conversations use hover:bg-list-hover
-                const currentItems = Array.from(document.querySelectorAll('[class*="bg-quickinput-list-focusBackground"]'));
-                const otherItems = Array.from(document.querySelectorAll('[class*="hover:bg-list-hover"]'));
-                // Merge and deduplicate
-                const seen = new Set();
-                const items = [...currentItems, ...otherItems].filter(el => {
-                    if (seen.has(el)) return false;
-                    seen.add(el);
-                    return true;
-                });
-
-                let targetEl = null;
-
-                if (isIndex) {
-                    if (targetVal >= 0 && targetVal < items.length) targetEl = items[targetVal];
-                } else {
-                    targetEl = items.find(el => el.textContent.includes(targetVal));
-                }
-
-                if (targetEl) {
-                    targetEl.click();
-                    return true;
-                }
-                return false;
-            }, target);
-
-            if (found) {
-                console.log('✅ CDP: Switched conversation!');
-                return { success: true };
-            } else {
-                return { success: false, error: 'Conversation not found' };
-            }
-
-        } catch (e) {
-            console.error('❌ CDP Switch Conversation Error:', e.message);
-            return { success: false, error: e.message };
-        }
-    }
 
     /**
      * 📂 Mở Project Folder (VS Code Command)
@@ -1277,143 +1315,257 @@ class AntigravityBridge {
     }
 
     /**
-     * 🎯 Mở Model Picker
-     * Sử dụng Antigravity command: workbench.action.chat.openModelPicker
+     * 🎯 Fetch available models from the dropdown UI
+     * Updated for new Antigravity UI: button[aria-label^="Select model"] + button dropdown items
      */
-    async openModelPicker() {
-        if (!this.page) return { success: false, error: 'Not connected to Antigravity' };
+    async getModels() {
+        if (!this.page) return { success: false, error: 'Not connected' };
 
         try {
-            console.log('🎯 CDP: Opening model picker...');
+            console.log('🎯 CDP: Fetching available models...');
 
-            await this.page.evaluate(() => {
-                // @ts-ignore
-                if (typeof vscode !== 'undefined') {
-                    vscode.commands.executeCommand('workbench.action.chat.openModelPicker');
+            const scanDropdown = async (frame) => {
+                try {
+                    return await frame.evaluate(() => {
+                        const logs = [];
+                        logs.push("Scanning frame for model trigger");
+
+                        let trigger = null;
+
+                        // Strategy 1: Find button with aria-label="Select model, current: ..."
+                        const selectModelBtns = document.querySelectorAll('button[aria-label^="Select model"]');
+                        logs.push(`Found ${selectModelBtns.length} buttons with aria-label^="Select model"`);
+                        for (const btn of selectModelBtns) {
+                            const rect = btn.getBoundingClientRect();
+                            if (rect.width > 0 && rect.height > 0) {
+                                trigger = btn;
+                                logs.push(`Found trigger via aria-label: "${btn.getAttribute('aria-label')}"`);
+                                break;
+                            }
+                        }
+
+                        // Strategy 2: Find button with chevron-up SVG + model name span
+                        if (!trigger) {
+                            const chevrons = document.querySelectorAll('svg.lucide-chevron-up');
+                            logs.push(`Fallback: Found ${chevrons.length} chevron-up SVGs`);
+                            for (const svg of chevrons) {
+                                const wrapper = svg.closest('button') || svg.closest('[role="button"]');
+                                if (wrapper) {
+                                    const textSpan = wrapper.querySelector('span.opacity-70') || wrapper.querySelector('span');
+                                    if (textSpan && textSpan.textContent.trim().length > 2) {
+                                        trigger = wrapper;
+                                        logs.push(`Found trigger via chevron: "${textSpan.textContent.trim()}"`);
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+
+                        if (!trigger) {
+                            logs.push("Could not find any suitable trigger.");
+                            return { found: false, logs };
+                        }
+
+                        try {
+                            trigger.click();
+                            logs.push("Clicked trigger.");
+                        } catch (e) {
+                            logs.push("Error clicking trigger: " + e.message);
+                        }
+
+                        return { found: true, logs };
+                    });
+                } catch (e) {
+                    return { found: false, logs: ['Evaluate error: ' + e.message] };
                 }
+            };
+
+            let TargetFrame = null;
+            let scanResult = null;
+
+            if (this.cachedChatFrame) {
+                scanResult = await scanDropdown(this.cachedChatFrame);
+                if (scanResult && scanResult.found) TargetFrame = this.cachedChatFrame;
+                else console.log('Cached frame scan logs:', scanResult?.logs || scanResult);
+            }
+            if (!TargetFrame) {
+                const frames = this.page.frames();
+                for (const frame of frames) {
+                    scanResult = await scanDropdown(frame);
+                    if (scanResult && scanResult.found) {
+                        TargetFrame = frame;
+                        break;
+                    } else if (scanResult && scanResult.logs && scanResult.logs.length > 1) {
+                        console.log(`Failed frame scan logs (${frame.url()}):`, scanResult.logs);
+                    }
+                }
+            }
+
+            if (!TargetFrame) return { success: false, error: 'Model dropdown trigger not found' };
+
+            // Wait for dropdown to render
+            await new Promise(r => setTimeout(r, 500));
+
+            // 2. Extract models from the dropdown popup
+            const models = await TargetFrame.evaluate(() => {
+                const results = [];
+
+                // New UI: dropdown items are <button> elements with <span class="text-xs font-medium"><span>Model Name</span></span>
+                // The active model has data-autofocus="true" and bg-gray-500/20 class
+                const items = document.querySelectorAll('button[data-autofocus] span.text-xs.font-medium > span');
+
+                items.forEach((nameSpan, idx) => {
+                    const name = nameSpan.textContent.trim();
+                    if (name && name.length > 2) {
+                        // Check if this is the active model
+                        const parentBtn = nameSpan.closest('button[data-autofocus]');
+                        const isActive = parentBtn?.getAttribute('data-autofocus') === 'true' ||
+                                         parentBtn?.classList.contains('bg-gray-500/20');
+                        results.push({ index: idx, name, isActive: !!isActive });
+                    }
+                });
+
+                // Close dropdown: press Escape or click trigger again
+                try {
+                    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+                    // Also try clicking the trigger to close
+                    const trigger = document.querySelector('button[aria-label^="Select model"]');
+                    if (trigger) trigger.click();
+                } catch (e) { }
+
+                return results;
             });
 
-            console.log('✅ CDP: Model picker opened!');
-            return { success: true };
+            if (models && models.length > 0) {
+                console.log(`✅ CDP: Found ${models.length} models: ${models.map(m => m.name).join(', ')}`);
+                return { success: true, models };
+            }
+
+            return { success: false, error: 'No models found in dropdown' };
+
         } catch (e) {
-            console.error('❌ CDP Open Model Picker Error:', e.message);
+            console.error('❌ CDP Get Models Error:', e.message);
             return { success: false, error: e.message };
         }
     }
 
     /**
-     * 🎨 Đổi sang model cụ thể bằng CDP DOM Click
-     * Click vào model picker button, sau đó click vào model cần chọn
-     * @param {string} modelName - Tên model (ví dụ: "Claude Opus 4.5", "Gemini 3 Pro")
+     * 🎨 Chuyển sang model cụ thể (bằng index hoặc tên)
+     * Updated for new Antigravity UI: button[aria-label^="Select model"] + button[data-autofocus] items
      */
-    async changeModel(modelName) {
+    async changeModel(target) {
         if (!this.page) return { success: false, error: 'Not connected to Antigravity' };
 
         try {
-            console.log(`🎨 CDP: Changing model to: ${modelName}...`);
+            console.log(`🎨 CDP: Changing model to target: ${target}`);
 
-            const frames = this.page.frames();
-            for (const frame of frames) {
-                const frameUrl = frame.url();
-                if (!frameUrl || frameUrl === 'about:blank') continue;
-
-                if (!frameUrl.includes('cascade-panel') && !frameUrl.includes('agentPanel') && !frameUrl.includes('webview') && !frameUrl.includes('extension')) {
-                    continue;
-                }
-
+            const clickModel = async (frame, targetVal) => {
                 try {
-                    // Step 1: Tìm Model Picker Button
-                    const selectors = [
-                        'button[class*="model"]',
-                        '[aria-label*="model" i]',
-                        'button:has-text("Claude")',
-                        'button:has-text("Gemini")',
-                        'button:has-text("GPT")'
-                    ];
+                    return await frame.evaluate(async (matchTarget) => {
+                        const logs = [];
 
-                    let modelButton = null;
-                    for (const sel of selectors) {
-                        try {
-                            modelButton = await frame.$(sel);
-                            if (modelButton) break;
-                        } catch (e) { }
-                    }
-
-                    if (!modelButton) {
-                        // Tìm bằng text content (Cách cũ)
-                        modelButton = await frame.evaluateHandle(() => {
-                            const btns = Array.from(document.querySelectorAll('button, [role="button"]'));
-                            return btns.find(b => {
-                                const txt = b.textContent?.toLowerCase() || '';
-                                return txt.includes('claude') || txt.includes('gemini') || txt.includes('gpt') || txt.includes('model');
-                            });
-                        });
-                        modelButton = modelButton?.asElement();
-                    }
-
-                    if (!modelButton) continue;
-
-                    // Mở dropdown
-                    console.log('🖱️ CDP: Opening model dropdown...');
-                    await modelButton.click(); // Dùng Puppeteer click (Cách cũ)
-                    await new Promise(r => setTimeout(r, 800));
-
-                    // Step 2: Tìm model trong dropdown
-                    const elements = await frame.$$('div, span, button, li, [role="menuitem"]');
-                    let bestEl = null;
-                    let bestScore = -1;
-                    let bestText = '';
-
-                    const targetClean = modelName.toLowerCase().replace(/[^a-z0-9]/g, '');
-
-                    for (const el of elements) {
-                        try {
-                            const text = await el.evaluate(node => node.textContent?.trim() || '');
-                            if (text.length < 3 || text.length > 80) continue;
-
-                            const textClean = text.toLowerCase().replace(/[^a-z0-9]/g, '');
-                            let score = 0;
-
-                            if (textClean === targetClean) score = 100;
-                            else if (textClean.includes(targetClean)) score = 50;
-                            else if (targetClean.includes(textClean)) score = 30;
-
-                            if (score > bestScore) {
-                                bestScore = score;
-                                bestEl = el;
-                                bestText = text;
+                        // 1. Open dropdown
+                        const findTrigger = () => {
+                            // Strategy 1: aria-label="Select model, current: ..."
+                            const selectBtns = document.querySelectorAll('button[aria-label^="Select model"]');
+                            for (const btn of selectBtns) {
+                                const rect = btn.getBoundingClientRect();
+                                if (rect.width > 0 && rect.height > 0) return btn;
                             }
+                            // Strategy 2: chevron-up SVG fallback
+                            const chevrons = document.querySelectorAll('svg.lucide-chevron-up');
+                            for (const svg of chevrons) {
+                                const wrapper = svg.closest('button') || svg.closest('[role="button"]');
+                                if (wrapper) {
+                                    const textSpan = wrapper.querySelector('span.opacity-70') || wrapper.querySelector('span');
+                                    if (textSpan && textSpan.textContent.trim().length > 2) return wrapper;
+                                }
+                            }
+                            return null;
+                        };
+
+                        const trigger = findTrigger();
+                        if (!trigger) {
+                            logs.push("Could not find trigger in changeModel");
+                            return { found: false, reason: 'no_trigger', logs };
+                        }
+
+                        try { trigger.click(); } catch (e) { }
+
+                        // Wait for dropdown to render
+                        await new Promise(r => setTimeout(r, 400));
+
+                        // 2. Find and click model in dropdown
+                        // New UI: items are <button data-autofocus="..."> with <span class="text-xs font-medium"><span>Name</span></span>
+                        const items = Array.from(document.querySelectorAll('button[data-autofocus]'));
+                        let targetEl = null;
+
+                        // Check if numeric index
+                        const isIndex = typeof matchTarget === 'number' || (typeof matchTarget === 'string' && !isNaN(parseInt(matchTarget)) && matchTarget.length < 3);
+
+                        if (isIndex) {
+                            const idx = parseInt(matchTarget);
+                            if (idx >= 0 && idx < items.length) targetEl = items[idx];
+                        } else {
+                            // Match by text (case insensitive, partial match allowed)
+                            const cleanTarget = matchTarget.toLowerCase().replace(/[^a-z0-9]/g, '');
+
+                            let bestScore = -1;
+                            for (const item of items) {
+                                const nameSpan = item.querySelector('span.text-xs.font-medium > span');
+                                if (!nameSpan) continue;
+
+                                const title = nameSpan.textContent.trim().toLowerCase().replace(/[^a-z0-9]/g, '');
+                                let score = 0;
+
+                                if (title === cleanTarget) score = 100;
+                                else if (title.includes(cleanTarget)) score = 50;
+                                else if (cleanTarget.includes(title)) score = 30;
+
+                                if (score > bestScore) {
+                                    bestScore = score;
+                                    targetEl = item;
+                                }
+                            }
+
+                            if (bestScore <= 0) targetEl = null;
+                        }
+
+                        if (targetEl) {
+                            const selectedName = targetEl.querySelector('span.text-xs.font-medium > span')?.textContent?.trim() || matchTarget;
+                            targetEl.click();
+                            return { found: true, selectedName };
+                        }
+
+                        // Close dropdown if not found
+                        try {
+                            document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+                            trigger.click();
                         } catch (e) { }
+                        return { found: false, reason: 'no_match', logs };
+                    }, targetVal);
+                } catch (e) { return { found: false, reason: 'eval_error', logs: [e.message] }; }
+            };
+
+            let result = null;
+            if (this.cachedChatFrame) {
+                result = await clickModel(this.cachedChatFrame, target);
+                if (!result || !result.found) console.log('changeModel cached frame logs:', result?.logs || result);
+            }
+            if (!result || !result.found) {
+                const frames = this.page.frames();
+                for (const frame of frames) {
+                    result = await clickModel(frame, target);
+                    if (result && result.found) break;
+                    else if (result && result.logs && result.logs.length > 0) {
+                        console.log(`changeModel failed frame logs (${frame.url()}):`, result.logs);
                     }
-
-                    if (bestEl && bestScore > 0) {
-                        console.log(`🎯 CDP: Match found: "${bestText}" (Score: ${bestScore})`);
-
-                        // KẾT HỢP CẢ 2 CÁCH CLICK:
-                        // 1. Click bằng Puppeteer (Cách cũ - Claude thích cái này)
-                        await bestEl.click();
-
-                        // 2. Dispatch đầy đủ sự kiện JS (Cách mới - Gemini thích cái này)
-                        await bestEl.evaluate((node) => {
-                            ['mousedown', 'click', 'mouseup'].forEach(type => {
-                                node.dispatchEvent(new MouseEvent(type, {
-                                    bubbles: true,
-                                    cancelable: true,
-                                    view: window,
-                                    buttons: 1
-                                }));
-                            });
-                        });
-
-                        console.log(`✅ CDP: Model "${bestText}" selected!`);
-                        return { success: true, model: bestText };
-                    }
-
-                    console.log(`⚠️ CDP: Could not find any good match for "${modelName}" in this frame`);
-
-                } catch (e) {
-                    console.log(`⚠️ CDP Frame error: ${e.message}`);
                 }
+            }
+
+            if (result && result.found) {
+                console.log(`✅ CDP: Switched to model: ${result.selectedName}`);
+                return { success: true, model: result.selectedName };
             }
 
             return { success: false, error: 'Model selection failed' };
@@ -1422,6 +1574,7 @@ class AntigravityBridge {
             return { success: false, error: e.message };
         }
     }
+
 
     /**
      * Click vào toạ độ (x, y) thông qua CDP Input
@@ -1451,177 +1604,112 @@ class AntigravityBridge {
         try {
             console.log(`📝 CDP: Injecting text to chat: "${text.substring(0, 50)}..."`);
 
-            // Tìm tất cả frames (bao gồm cross-origin)
-            const frames = this.page.frames();
+            const chatSelectors = [
+                '[data-lexical-editor="true"][contenteditable="true"]',
+                '[contenteditable="true"][role="textbox"]',
+                'textarea[placeholder*="type"]',
+                'textarea[placeholder*="message"]',
+                'textarea[placeholder*="chat"]',
+                'textarea[placeholder*="Ask"]',
+                'textarea:not(.xterm-helper-textarea)',
+                '[contenteditable="true"]:not([class*="xterm"])'
+            ];
 
-            // ========== FIX: Ưu tiên CHAT frame, bỏ qua TERMINAL frame ==========
-            // Antigravity chat thường nằm trong extension frame với chat-related elements
-
-            let chatFrame = null;
             let chatInput = null;
+            let frame = null;
 
-            for (const frame of frames) {
-                const frameUrl = frame.url();
-
-                // Skip empty, about:blank, devtools
-                if (!frameUrl || frameUrl === 'about:blank' || frameUrl.includes('devtools')) {
-                    continue;
-                }
-
-                // ========== SKIP TERMINAL FRAMES ==========
-                // Terminal frames thường chứa các patterns này trong URL
-                if (frameUrl.includes('terminal') ||
-                    frameUrl.includes('xterm') ||
-                    frameUrl.includes('pty')) {
-                    console.log(`⏭️ CDP: Skipping terminal frame (URL): ${frameUrl.substring(0, 50)}...`);
-                    continue;
-                }
-
-                // NOTE: Không filter theo 'extension' vì chat có thể nằm trong vscode-file:// frames
-
-                try {
-                    // ========== KIỂM TRA XEM FRAME CÓ CHỨA TERMINAL KHÔNG ==========
-                    // Nếu frame chứa xterm hoặc terminal container, skip hoàn toàn
-                    const isTerminalFrame = await frame.evaluate(() => {
-                        // Kiểm tra xterm (VS Code integrated terminal)
-                        const hasXterm = document.querySelector('.xterm, .xterm-viewport, .xterm-screen, [class*="terminal"], [class*="Terminal"]');
-
-                        // Kiểm tra PowerShell Extension terminal
-                        const hasPowerShell = document.querySelector('[class*="powershell"], [class*="PowerShell"], [id*="powershell"]');
-
-                        // Kiểm tra nếu body chủ yếu là terminal
-                        const bodyClasses = document.body?.className?.toLowerCase() || '';
-                        const isTerminalBody = bodyClasses.includes('terminal') || bodyClasses.includes('xterm') || bodyClasses.includes('powershell');
-
-                        // Kiểm tra title hoặc aria-label
-                        const title = document.title?.toLowerCase() || '';
-                        const isPowerShellTitle = title.includes('powershell');
-
-                        return !!hasXterm || !!hasPowerShell || isTerminalBody || isPowerShellTitle;
-                    }).catch(() => false);
-
-                    if (isTerminalFrame) {
-                        console.log(`⏭️ CDP: Skipping terminal frame (DOM): ${frameUrl.substring(0, 50)}...`);
-                        continue;
+            // PRIORITY 1: Try cachedChatFrame first
+            if (this.cachedChatFrame) {
+                for (const sel of chatSelectors) {
+                    chatInput = await this.cachedChatFrame.$(sel);
+                    if (chatInput) {
+                        frame = this.cachedChatFrame;
+                        console.log(`✅ CDP: Found input via cached frame: ${sel}`);
+                        break;
                     }
-
-                    // ========== Tìm input chat - ƯU TIÊN các selectors chat cụ thể ==========
-                    // Chat input thường có placeholder hoặc aria-label liên quan đến chat
-                    const chatSelectors = [
-                        'textarea[placeholder*="type"]',
-                        'textarea[placeholder*="message"]',
-                        'textarea[placeholder*="chat"]',
-                        'textarea[placeholder*="Ask"]',
-                        'textarea[placeholder*="nhập"]',
-                        'textarea[placeholder*="lệnh"]',
-                        'textarea[placeholder*="prompt"]',
-                        'textarea[aria-label*="chat"]',
-                        'textarea[aria-label*="prompt"]',
-                        'textarea[aria-label*="message"]',
-                        '[role="textbox"][aria-label*="chat"]',
-                        '[role="textbox"][aria-label*="prompt"]',
-                        '[contenteditable="true"][aria-label*="chat"]',
-                        '[contenteditable="true"][aria-label*="prompt"]'
-                    ];
-
-                    let inputSelector = null;
-
-                    // Thử các chat-specific selectors trước
-                    for (const sel of chatSelectors) {
-                        inputSelector = await frame.$(sel);
-                        if (inputSelector) {
-                            console.log(`✅ CDP: Found CHAT input with selector: ${sel}`);
-                            break;
-                        }
-                    }
-
-                    // Fallback: textarea hoặc contenteditable (nhưng phải trong chat container)
-                    if (!inputSelector) {
-                        // Kiểm tra xem frame có phải là chat panel không (không phải terminal)
-                        const hasChatIndicators = await frame.evaluate(() => {
-                            // Tìm các dấu hiệu của chat UI
-                            const chatIndicators = document.querySelectorAll(
-                                '[class*="chat"], [class*="message"], [class*="conversation"], [class*="prompt"], [class*="transcript"]'
-                            );
-                            // Không có terminal indicators (bao gồm PowerShell)
-                            const hasTerminal = document.querySelector('.xterm, [class*="terminal"], [class*="Terminal"], [class*="powershell"], [class*="PowerShell"]');
-                            return chatIndicators.length > 0 && !hasTerminal;
-                        }).catch(() => false);
-
-                        if (hasChatIndicators) {
-                            // Tìm input nhưng KHÔNG phải trong terminal container
-                            inputSelector = await frame.evaluate(() => {
-                                const candidates = document.querySelectorAll('textarea, [contenteditable="true"], [role="textbox"]');
-                                for (const el of candidates) {
-                                    // Skip nếu element nằm trong terminal hoặc PowerShell
-                                    const inTerminal = el.closest('.xterm, [class*="terminal"], [class*="Terminal"], [class*="powershell"], [class*="PowerShell"]');
-                                    if (inTerminal) continue;
-                                    // Skip nếu element có class liên quan terminal hoặc PowerShell
-                                    const className = el.className?.toLowerCase?.() || '';
-                                    const id = el.id?.toLowerCase?.() || '';
-                                    if (className.includes('xterm') || className.includes('terminal') || className.includes('powershell')) continue;
-                                    if (id.includes('powershell') || id.includes('terminal')) continue;
-                                    return true; // Tìm được input không phải terminal
-                                }
-                                return false;
-                            });
-                            if (inputSelector) {
-                                inputSelector = await frame.$('textarea:not(.xterm-helper-textarea):not([class*="powershell"]), [contenteditable="true"]:not([class*="xterm"]):not([class*="powershell"]), [role="textbox"]:not([class*="xterm"]):not([class*="powershell"])');
-                            }
-                        }
-                    }
-
-                    if (!inputSelector) {
-                        continue;
-                    }
-
-                    // Lưu frame và input tìm được
-                    chatFrame = frame;
-                    chatInput = inputSelector;
-                    console.log(`✅ CDP: Found CHAT input in frame: ${frameUrl.substring(0, 60)}...`);
-                    break; // Tìm được chat frame rồi, dừng lại
-
-                } catch (frameErr) {
-                    // Frame evaluation failed, try next
-                    console.log(`⚠️ CDP: Frame evaluation error: ${frameErr.message}`);
                 }
             }
 
-            if (!chatFrame || !chatInput) {
-                console.log('⚠️ CDP: No CHAT input found (skipped terminal frames)');
+            // PRIORITY 2: Scan ALL browser pages and their frames (same as getLastAIResponse)
+            if (!chatInput) {
+                let allPages = [];
+                if (this.browser) {
+                    try { allPages = await this.browser.pages(); } catch (e) { if (this.page) allPages = [this.page]; }
+                } else if (this.page) {
+                    allPages = [this.page];
+                }
+
+                console.log(`🔍 CDP inject: Scanning ${allPages.length} pages for chat input...`);
+
+                for (const pg of allPages) {
+                    if (chatInput) break;
+                    try {
+                        const pgUrl = pg.url();
+                        if (!pgUrl || pgUrl.includes('about:blank') || pgUrl.includes('devtools')) continue;
+
+                        const frames = pg.frames();
+                        for (const f of frames) {
+                            if (chatInput) break;
+                            try {
+                                const fUrl = f.url();
+                                if (!fUrl || fUrl === 'about:blank') continue;
+
+                                for (const sel of chatSelectors) {
+                                    chatInput = await f.$(sel);
+                                    if (chatInput) {
+                                        frame = f;
+                                        this.cachedChatFrame = f; // Cache for future use
+                                        console.log(`✅ CDP: Found input in frame: ${fUrl.substring(0, 60)}, selector: ${sel}`);
+                                        break;
+                                    }
+                                }
+                            } catch (e) { /* skip frame */ }
+                        }
+                    } catch (e) { /* skip page */ }
+                }
+            }
+
+            if (!chatInput || !frame) {
+                console.log('⚠️ CDP: No chat input found in any page/frame');
                 return false;
             }
 
-            // ========== Thực hiện inject - CDP TYPE (không dùng clipboard) ==========
-            console.log(`📝 CDP: Injecting into chat frame...`);
-
-            // 1. Click vào input để focus
+            // 1. Click input to focus
             await chatInput.click();
             await new Promise(r => setTimeout(r, 100));
-            console.log(`✅ CDP: Clicked input to focus`);
 
-            // 2. Select all và xóa nội dung cũ (nếu có)
+            // 2. Clear existing text
             await this.page.keyboard.down('Control');
             await this.page.keyboard.press('KeyA');
             await this.page.keyboard.up('Control');
             await this.page.keyboard.press('Backspace');
             await new Promise(r => setTimeout(r, 50));
 
-            // 3. Type text trực tiếp (KHÔNG dùng clipboard)
-            // Dùng Puppeteer type() - type từng ký tự với delay nhỏ
-            const typeDelay = text.length > 500 ? 1 : 5; // Faster for long text
-            await chatInput.type(text, { delay: typeDelay });
-            console.log(`✅ CDP: Typed text directly (${text.length} chars, delay=${typeDelay}ms)`);
+            // 3. Insert text via clipboard (fast!) instead of char-by-char typing
+            await frame.evaluate((txt) => {
+                const input = document.activeElement;
+                if (input && (input.tagName === 'TEXTAREA' || input.isContentEditable)) {
+                    // Use execCommand for contenteditable, value setter for textarea
+                    if (input.isContentEditable) {
+                        document.execCommand('insertText', false, txt);
+                    } else {
+                        const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value').set;
+                        nativeSetter.call(input, txt);
+                        input.dispatchEvent(new Event('input', { bubbles: true }));
+                        input.dispatchEvent(new Event('change', { bubbles: true }));
+                    }
+                }
+            }, text);
+            console.log(`✅ CDP: Injected text (${text.length} chars)`);
 
-            // 4. Nhấn Enter để gửi (nếu submit = true)
+            // 4. Submit
             if (submit !== false) {
+                await new Promise(r => setTimeout(r, 100));
                 await this.page.keyboard.press('Enter');
                 console.log(`✅ CDP: Enter key sent`);
-            } else {
-                console.log(`✅ CDP: Text injected (no submit)`);
             }
 
-            return { injected: true, submitted: submit !== false };
+            return { injected: true, submitted: submit !== false, success: true };
 
         } catch (e) {
             console.error('❌ CDP Inject Text Error:', e.message);
@@ -1972,16 +2060,16 @@ class AntigravityBridge {
             const self = this;
             const MIN_LEN = this.MIN_RESPONSE_LENGTH;
             const PATTERNS = this.NOISE_PATTERNS;
- 
+     
             await this.page.exposeFunction('onNewMessage', (content, role = 'assistant') => {
                 // ... noise filter logic ...
             });
- 
+     
             // 2. Inject script để theo dõi DOM changes
             await this.page.evaluate((selectors) => {
                 // ... observer logic ...
             }, this.selectors);
- 
+     
             console.log('✅ DOM Observer đã được thiết lập');
         } catch (err) {
             console.log('⚠️ DOM Observer error:', err.message);
@@ -2333,7 +2421,8 @@ class AntigravityBridge {
 
                         // ===== STRATEGY 1: Tìm message containers (selectors) =====
                         const primarySelectors = [
-                            '.notify-user-container'
+                            '.notify-user-container',
+                            '.leading-relaxed.select-text' // NEW: Antigravity v3 generic text block
                         ];
                         const fallbackSelectors = [
                             '[class*="message"]',
@@ -2346,6 +2435,7 @@ class AntigravityBridge {
                             '[class*="bubble"]',
                             '[data-role]',
                             '[data-message-role]',
+                            '.leading-relaxed',
                             // Antigravity specific selectors
                             '[class*="turn-"]',
                             '[class*="conversation"]',
@@ -2356,7 +2446,7 @@ class AntigravityBridge {
                             'article',
                             '.prose'
                         ];
-                        const selectors = document.querySelectorAll('.notify-user-container').length
+                        const selectors = document.querySelectorAll('.notify-user-container, .leading-relaxed.select-text').length
                             ? primarySelectors
                             : fallbackSelectors;
 
@@ -2394,23 +2484,17 @@ class AntigravityBridge {
                                     }
                                     if (modelCount >= 3) return;
 
-                                    // Dedupe
-                                    const textKey = text.substring(0, 100) + text.length;
-                                    if (seenTexts.has(textKey)) return;
-                                    seenTexts.add(textKey);
-
-                                    // Detect role
-                                    let role = 'unknown';
-                                    if (classLower.includes('user') || classLower.includes('human')) {
-                                        role = 'user';
-                                    } else if (classLower.includes('assistant') || classLower.includes('ai') ||
-                                        classLower.includes('response') || classLower.includes('bot')) {
-                                        role = 'assistant';
+                                    // Detect role: thinking vs response
+                                    let role = 'assistant';
+                                    if (className.includes('opacity-70')) {
+                                        role = 'thinking';
                                     }
 
-                                    msgs.push({
+                                    const htmlContent = getHtmlContent(container) || text;
+
+                                    results.push({
                                         text: text,
-                                        html: getHtmlContent(container), // NEW: Include HTML for tables
+                                        html: htmlContent, // NEW: Include HTML for tables
                                         class: className,
                                         role: role,
                                         method: 'cdp-selector'
@@ -2422,11 +2506,11 @@ class AntigravityBridge {
                         }
 
                         // ===== STRATEGY 2: Fallback - Lấy raw text từ body nếu không tìm được =====
-                        if (msgs.length === 0) {
-                            const bodyText = document.body?.innerText || '';
+                        if (results.length === 0) {
+                            const bodyText = doc.body?.innerText || '';
                             if (bodyText.length > 100) {
                                 // Tách text thành các đoạn bằng newlines
-                                const paragraphs = bodyText.split(/\n{2,}/).filter(p => p.trim().length > 30);
+                                const paragraphs = bodyText.split(/\\n{2,}/).filter(p => p.trim().length > 30);
 
                                 // Chỉ lấy các đoạn có vẻ là AI response (không phải UI)
                                 for (const para of paragraphs) {
@@ -2442,7 +2526,7 @@ class AntigravityBridge {
                                     if (seenTexts.has(textKey)) continue;
                                     seenTexts.add(textKey);
 
-                                    msgs.push({
+                                    results.push({
                                         text: trimmed,
                                         class: 'raw-body',
                                         role: 'assistant',
@@ -2452,7 +2536,7 @@ class AntigravityBridge {
                             }
                         }
 
-                        return msgs;
+                        return results;
                     });
 
                     if (frameMessages && frameMessages.length > 0) {
@@ -2515,7 +2599,8 @@ class AntigravityBridge {
                         // ===== PHƯƠNG ÁN 1: Tìm MESSAGE CONTAINERS =====
                         // Các selector phổ biến cho chat messages
                         const primarySelectors = [
-                            '.notify-user-container'
+                            '.notify-user-container',
+                            '.leading-relaxed.select-text' // NEW: Antigravity v3 generic text block
                         ];
                         const fallbackSelectors = [
                             '[class*="message"]',
@@ -2526,9 +2611,10 @@ class AntigravityBridge {
                             '[class*="user"]',
                             '[class*="chat-item"]',
                             '[data-role]',
-                            '[data-message-role]'
+                            '[data-message-role]',
+                            '.leading-relaxed'
                         ];
-                        const selectors = doc.querySelectorAll('.notify-user-container').length
+                        const selectors = doc.querySelectorAll('.notify-user-container, .leading-relaxed.select-text').length
                             ? primarySelectors
                             : fallbackSelectors;
                         
@@ -2705,9 +2791,149 @@ class AntigravityBridge {
 
     /**
      * Bắt đầu polling chat từ iframe và stream qua WebSocket
-     * STABLE THRESHOLD: Emit chat_update khi streaming, chat_complete khi ổn định
-     * @param {string} sessionId - Session ID để emit events
-     * @param {number} intervalMs - Polling interval (default 2000ms)
+    /**
+     * Auto-click Run/Accept buttons in the Antigravity IDE
+     * Polls every 1.5s for actionable buttons and clicks them
+     * WHITELIST: "Run", "Accept" only
+     * BLACKLIST: "Send", "Submit", "Cancel", "Reject"
+     */
+    startButtonAutoClicker(intervalMs = 1000) {
+        if (this._buttonClickerInterval) {
+            console.log('⚠️ Button auto-clicker already running');
+            return;
+        }
+
+        const WHITELIST = ['run', 'accept'];
+        const BLACKLIST = ['send', 'submit', 'cancel', 'reject', 'delete', 'remove'];
+        let clickCount = 0;
+
+        this._buttonClickerInterval = setInterval(async () => {
+            if (!this.isConnected) return;
+
+            try {
+                const frame = this.cachedChatFrame || this.page;
+                if (!frame) return;
+
+                const clicked = await frame.evaluate((whitelist, blacklist) => {
+                    // STEP 1: Auto-scroll ONLY the main chat response area
+                    // Find containers that actually contain chat content (not sidebars/dropdowns)
+                    const allScrollable = document.querySelectorAll('[class*="overflow-y-auto"], [class*="overflow-auto"]');
+                    for (const container of allScrollable) {
+                        // ONLY scroll if container has chat content inside it
+                        const hasChatContent = container.querySelector('.leading-relaxed.select-text, .isolate.mb-2');
+                        if (!hasChatContent) continue;
+                        if (container.scrollHeight > container.clientHeight + 50) {
+                            container.scrollTop = container.scrollHeight;
+                        }
+                    }
+                    // B) Xterm terminals — scroll ALL viewports to bottom
+                    const xtermViewports = document.querySelectorAll('.xterm-viewport');
+                    for (const vp of xtermViewports) {
+                        // Set scrollTop to max
+                        vp.scrollTop = 999999;
+                        // Also scroll the inner scroll area if exists
+                        const scrollArea = vp.querySelector('div');
+                        if (scrollArea) {
+                            vp.scrollTop = scrollArea.offsetHeight;
+                        }
+                        // Dispatch scroll event so xterm re-renders at new position
+                        vp.dispatchEvent(new Event('scroll', { bubbles: false }));
+                    }
+                    // C) Also scroll xterm-scrollable-element containers
+                    const xtermScrollables = document.querySelectorAll('.xterm-scrollable-element');
+                    for (const xs of xtermScrollables) {
+                        xs.scrollTop = 999999;
+                    }
+                    // D) Try Terminal API scrollToBottom on ALL xterm instances
+                    const xtermElements = document.querySelectorAll('.xterm');
+                    for (const el of xtermElements) {
+                        const terminal = el._xterm || el.xterm;
+                        if (terminal && typeof terminal.scrollToBottom === 'function') {
+                            terminal.scrollToBottom();
+                        }
+                    }
+                    // E) Click any "scroll to bottom" buttons (arrow-down, chevron-down, etc.)
+                    const scrollBtns = document.querySelectorAll(
+                        'button[aria-label*="scroll" i], button[aria-label*="bottom" i], ' +
+                        'button[title*="scroll" i], button[title*="bottom" i], ' +
+                        'button[class*="scroll-to-bottom"], button[class*="scrollToBottom"], ' +
+                        '[class*="scroll-down"], [class*="jump-to-bottom"]'
+                    );
+                    for (const sb of scrollBtns) {
+                        sb.click();
+                    }
+                    // F) Also try clicking any standalone down-arrow buttons near chat
+                    const allBtns = document.querySelectorAll('button');
+                    for (const b of allBtns) {
+                        const label = (b.getAttribute('aria-label') || '').toLowerCase();
+                        const title = (b.getAttribute('title') || '').toLowerCase();
+                        if (label.includes('down') || label.includes('latest') ||
+                            title.includes('down') || title.includes('latest') ||
+                            label.includes('newest') || title.includes('newest')) {
+                            // Check it has a down arrow icon (SVG with specific path or class)
+                            const svg = b.querySelector('svg');
+                            if (svg) {
+                                b.click();
+                            }
+                        }
+                    }
+
+                    // STEP 2: Find and click whitelisted buttons
+                    const buttons = document.querySelectorAll('button');
+                    const results = [];
+
+                    for (const btn of buttons) {
+                        // Get button text (first span child or direct text)
+                        const spans = btn.querySelectorAll('span');
+                        let btnText = '';
+                        for (const span of spans) {
+                            const t = (span.textContent || '').trim().toLowerCase();
+                            if (t && !t.includes('alt+') && !t.includes('⏎')) {
+                                btnText = t;
+                                break;
+                            }
+                        }
+                        if (!btnText) btnText = (btn.textContent || '').trim().toLowerCase();
+
+                        // Check whitelist
+                        if (!whitelist.includes(btnText)) continue;
+
+                        // Double-check not blacklisted
+                        if (blacklist.some(b => btnText.includes(b))) continue;
+
+                        // Make sure button is not disabled
+                        if (btn.disabled) continue;
+
+                        // Scroll button into view first, then click
+                        btn.scrollIntoView({ behavior: 'instant', block: 'center' });
+                        btn.click();
+                        results.push(btnText);
+                    }
+                    return results;
+                }, WHITELIST, BLACKLIST);
+
+                if (clicked && clicked.length > 0) {
+                    clickCount += clicked.length;
+                    console.log(`🖱️ Auto-clicked: [${clicked.join(', ')}] (total: ${clickCount})`);
+                }
+            } catch (e) {
+                // Suppress errors
+            }
+        }, intervalMs);
+
+        console.log(`🖱️ Button auto-clicker started (${intervalMs}ms, whitelist: ${WHITELIST.join(',')})`);
+    }
+
+    stopButtonAutoClicker() {
+        if (this._buttonClickerInterval) {
+            clearInterval(this._buttonClickerInterval);
+            this._buttonClickerInterval = null;
+            console.log('🖱️ Button auto-clicker stopped');
+        }
+    }
+
+    /**
+     * Bắt đầu polling chat từ iframe
      */
     startChatPolling(sessionId, intervalMs = 2000) {
         if (this.chatPollInterval) {
@@ -2724,7 +2950,122 @@ class AntigravityBridge {
 
         this.chatPollInterval = setInterval(async () => {
             try {
-                const messages = await this.extractChatFromIframe();
+                let messages = await this.extractChatFromIframe();
+
+                // Diagnostic: log every 10th cycle
+                this._pollCycleCount = (this._pollCycleCount || 0) + 1;
+                if (this._pollCycleCount % 10 === 1) {
+                    console.log(`🔄 Chat poll #${this._pollCycleCount}: extractChatFromIframe returned ${messages.length} messages, cachedChatFrame=${!!this.cachedChatFrame}`);
+                }
+
+                // FALLBACK: If extractChatFromIframe returns empty, try getLastAIResponse
+                if (messages.length === 0) {
+                    try {
+                        const lastResp = await this.getLastAIResponse();
+                        if (lastResp && lastResp.text && lastResp.text.length >= 10) {
+                            // Convert to message format
+                            const responseMsg = { text: lastResp.text, role: 'assistant', iframeIdx: 0 };
+                            messages = [responseMsg];
+
+                            // Also add thinking if available
+                            if (lastResp.thinking && lastResp.thinking.length >= 10) {
+                                messages.unshift({ text: lastResp.thinking, role: 'thinking', iframeIdx: 0 });
+                            }
+
+                            if (this._pollCycleCount % 10 === 1) {
+                                console.log(`🔄 Fallback: getLastAIResponse found ${messages.length} messages (text=${lastResp.text.length}, thinking=${(lastResp.thinking || '').length})`);
+                            }
+                        }
+                    } catch (e) { /* ignore fallback errors */ }
+                }
+
+                // ========== AUTO CLICK "RUN" BUTTON ==========
+                // Tự động tìm và bấm nút Run nếu AI yêu cầu chạy lệnh
+                try {
+                    const getAllFramesPoly = (frame) => {
+                        try {
+                            const childFrames = frame.childFrames();
+                            return [frame, ...childFrames.flatMap(getAllFramesPoly)];
+                        } catch { return [frame]; }
+                    };
+
+                    let runClicked = false;
+
+                    // Strategy 1: Scan ALL pages from browser (covers all webview targets)
+                    if (this.browser && !runClicked) {
+                        try {
+                            const allPages = await this.browser.pages();
+                            for (const pg of allPages) {
+                                const allFrames = getAllFramesPoly(pg.mainFrame());
+                                for (const f of allFrames) {
+                                    try {
+                                        if (!f || f.url() === 'about:blank') continue;
+                                        const clicked = await f.evaluate(() => {
+                                            const buttons = Array.from(document.querySelectorAll('button'));
+                                            // Match "Run" or "Accept" button — NOT Send, Submit, Terminal, etc.
+                                            const targetBtn = buttons.find(b => {
+                                                const txt = (b.textContent || '').trim();
+                                                const txtLower = txt.toLowerCase();
+                                                // Exclude non-action buttons
+                                                if (txtLower.includes('send') || txtLower.includes('submit') ||
+                                                    txtLower.includes('terminal') || txtLower.includes('cancel') ||
+                                                    txtLower.includes('copy') || txtLower.includes('close')) return false;
+                                                // Must be in an action dialog (not chat input area)
+                                                const inDialog = b.closest('.flex.items-center.justify-between') ||
+                                                    b.closest('[role="dialog"]') ||
+                                                    b.closest('.notification');
+                                                if (!inDialog) return false;
+                                                // Match "Run", "Run command", "Accept", "Accept All"
+                                                return (txt === 'Run' || txt.startsWith('Run ') ||
+                                                    txt === 'Accept' || txt.startsWith('Accept '));
+                                            });
+                                            if (targetBtn && !targetBtn.disabled) {
+                                                targetBtn.click();
+                                                return 'button-click: ' + (targetBtn.textContent || '').trim();
+                                            }
+                                            return false;
+                                        }).catch(() => false);
+                                        if (clicked) {
+                                            console.log(`▶️ CDP: Auto-clicked Run button! (${clicked})`);
+                                            runClicked = true;
+                                            break;
+                                        }
+                                    } catch { continue; }
+                                }
+                                if (runClicked) break;
+                            }
+                        } catch { /* browser.pages() failed */ }
+                    }
+
+                    // Strategy 2: Use cached chat frame
+                    if (!runClicked && this.cachedChatFrame) {
+                        try {
+                            const clicked = await this.cachedChatFrame.evaluate(() => {
+                                const buttons = Array.from(document.querySelectorAll('button'));
+                                const targetBtn = buttons.find(b => {
+                                    const txt = (b.textContent || '').trim();
+                                    const txtLower = txt.toLowerCase();
+                                    if (txtLower.includes('send') || txtLower.includes('submit') ||
+                                        txtLower.includes('terminal') || txtLower.includes('cancel') ||
+                                        txtLower.includes('copy') || txtLower.includes('close')) return false;
+                                    return (txt === 'Run' || txt.startsWith('Run ') ||
+                                        txt === 'Accept' || txt.startsWith('Accept '));
+                                });
+                                if (targetBtn && !targetBtn.disabled) {
+                                    targetBtn.click();
+                                    return 'cached-frame-click: ' + (targetBtn.textContent || '').trim();
+                                }
+                                return false;
+                            }).catch(() => false);
+                            if (clicked) {
+                                console.log(`▶️ CDP: Auto-clicked Run via cached frame! (${clicked})`);
+                                runClicked = true;
+                            }
+                        } catch { /* cached frame detached */ }
+                    }
+
+                    // Strategy 3 REMOVED: Alt+Enter keyboard was hitting Send button
+                } catch (e) { /* ignore error during polling */ }
 
                 // Detect new messages bằng hash
                 const newMessages = messages.filter(msg => {
@@ -3529,7 +3870,9 @@ class AntigravityBridge {
         if (this.cachedChatFrame) {
             try {
                 const isValid = await this.cachedChatFrame.evaluate(() => {
-                    return !!document.querySelector('[data-lexical-editor="true"][contenteditable="true"]');
+                    return !!(document.querySelector('[data-lexical-editor="true"][contenteditable="true"]') ||
+                        document.querySelector('textarea[placeholder*="message" i]') ||
+                        document.querySelector('textarea'));
                 }).catch(() => false);
 
                 if (isValid) {
@@ -3542,15 +3885,23 @@ class AntigravityBridge {
             }
         }
 
+        // Helper function (outside try/catch to be available to all steps)
+        const getAllFrames = (frame) => {
+            const childFrames = frame.childFrames();
+            return [frame, ...childFrames.flatMap(getAllFrames)];
+        };
+
         // ========== STEP 1: Try browser.pages() first (fast path) ==========
         try {
             const allPages = await this.browser.pages();
             for (const page of allPages) {
-                const contexts = [page, ...page.frames()];
+                const contexts = getAllFrames(page.mainFrame());
                 for (const ctx of contexts) {
                     try {
                         const hasEditor = await ctx.evaluate(() => {
-                            const el = document.querySelector('[data-lexical-editor="true"][contenteditable="true"]');
+                            const el = document.querySelector('[data-lexical-editor="true"][contenteditable="true"]') ||
+                                document.querySelector('textarea[placeholder*="message" i]') ||
+                                document.querySelector('textarea');
                             if (!el) return false;
                             const r = el.getBoundingClientRect();
                             return r.width > 0 && r.height > 0;
@@ -3599,11 +3950,13 @@ class AntigravityBridge {
 
                     const targetPages = await targetBrowser.pages();
                     for (const tp of targetPages) {
-                        const contexts = [tp, ...tp.frames()];
+                        const contexts = getAllFrames(tp.mainFrame());
                         for (const ctx of contexts) {
                             try {
                                 const hasEditor = await ctx.evaluate(() => {
-                                    const el = document.querySelector('[data-lexical-editor="true"][contenteditable="true"]');
+                                    const el = document.querySelector('[data-lexical-editor="true"][contenteditable="true"]') ||
+                                        document.querySelector('textarea[placeholder*="message" i]') ||
+                                        document.querySelector('textarea');
                                     if (!el) return false;
                                     const r = el.getBoundingClientRect();
                                     return r.width > 0 && r.height > 0;
@@ -3636,165 +3989,138 @@ class AntigravityBridge {
             console.log(`⚠️ CDP: Error fetching /json: ${e.message}`);
         }
 
+        try {
+            console.log('⚠️ CDP: Chat context NOT found. Dumping DOM to Data/diagnostic_log.txt...');
+            const fs = require('fs');
+            const path = require('path');
+            const logOut = [];
+
+            // Re-fetch targets
+            const res = await fetch(`${this.debugUrl}/json`);
+            const targets = await res.json();
+            logOut.push(`Total Targets: ${targets.length}`);
+
+            for (const t of targets) {
+                logOut.push(`\n=== TARGET [${t.type}] ${t.title} ===`);
+                if (!t.webSocketDebuggerUrl) continue;
+
+                try {
+                    const targetBrowser = await require('puppeteer-core').connect({
+                        browserWSEndpoint: t.webSocketDebuggerUrl,
+                        defaultViewport: null
+                    });
+
+                    const tPages = await targetBrowser.pages();
+                    for (let i = 0; i < tPages.length; i++) {
+                        const frames = getAllFrames(tPages[i].mainFrame());
+                        for (let j = 0; j < frames.length; j++) {
+                            const frame = frames[j];
+                            const findings = await frame.evaluate(() => {
+                                const els = document.querySelectorAll('textarea, input, button, [contenteditable="true"]');
+                                return Array.from(els).map(el => {
+                                    const rect = el.getBoundingClientRect();
+                                    return `[${el.tagName}] class="${el.className}" id="${el.id}" text="${(el.textContent || '').substring(0, 30).trim()}" placeholder="${el.getAttribute('placeholder') || ''}" aria-label="${el.getAttribute('aria-label') || ''}" size=${Math.round(rect.width)}x${Math.round(rect.height)} visible=${rect.width > 0 && rect.height > 0}`;
+                                });
+                            }).catch(() => []);
+                            if (findings.length > 0) {
+                                logOut.push(`  -> Frame ${j} (${frame.url()}):`);
+                                findings.forEach(f => logOut.push(`     ${f}`));
+                            }
+                        }
+                    }
+                    targetBrowser.disconnect();
+                } catch (e) { logOut.push(`  -> Error: ${e.message}`); }
+            }
+
+            const logPath = path.join(__dirname, '../../Data/diagnostic_log.txt');
+            fs.writeFileSync(logPath, logOut.join('\n'));
+            console.log(`✅ CDP: Diagnostic log saved to ${logPath}`);
+        } catch (dumpErr) {
+            console.log(`❌ CDP: Failed to generate diagnostic log: ${dumpErr.message}`);
+        }
+
         console.log('❌ CDP: Chat context NOT found (no Lexical editor in any target)');
         return null;
     }
 
+    // injectTextToChat() — MOVED to line ~1512 (single definition)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
     /**
-     * 📝 NEW Inject Text to Chat (Context-based - Production Version)
-     * REPLACES old injectTextToChat() method
-     * 
-     * Advantages over old method:
- * - ✅ 0% terminal risk (context isolated)
-     * - ✅ 20x faster (~20ms vs ~400ms)
-     * - ✅ 70% less code
-     * - ✅ Simple selectors (no heuristics needed)
-     * 
-     * @param {string} text - Text cần inject
-     * @param {boolean} [submit=true] - Có nhấn Enter/click gửi không. false = chỉ gắn text
-     * @returns {Object} - {success, submitted, method, error}
+     
+     * Ngắt kết nối
      */
-    async injectTextToChat(text, submit = true) {
-        if (!this.page) {
-            return { success: false, error: 'Not connected to Antigravity' };
-        }
+    // ==========================================
+    // 🔴 Go Live (Live Server) — Click status bar button
+    // ==========================================
+    async clickGoLive() {
+        if (!this.page) return { success: false, error: 'Not connected to Antigravity' };
 
         try {
-            console.log(`📝 CDP: Injecting text (${text.length} chars, submit=${submit}): "${text.substring(0, 50)}..."`);
+            console.log('🔴 CDP: Looking for Go Live / Live Server button...');
 
-            // ========== STEP 1: GET CHAT CONTEXT ==========
-            const chatFrame = await this.findChatContext();
-            if (!chatFrame) {
-                console.log('❌ CDP: Chat context not found');
-                return { success: false, error: 'Chat context not found' };
-            }
+            // Status bar items are in the main page DOM (not inside webview frames)
+            const result = await this.page.evaluate(() => {
+                // VS Code status bar items
+                const statusItems = document.querySelectorAll(
+                    '.statusbar-item a, .statusbar-item button, [id*="statusbar"] a, [id*="statusbar"] button, .right-items a, .left-items a'
+                );
 
-            // ========== STEP 2: INJECT IN CONTEXT (SIMPLE!) ==========
-            // Trong ĐÚNG context, không cần worry về terminal!
-            // Terminal ở context KHÁC → querySelector sẽ KHÔNG thấy nó!
+                for (const item of statusItems) {
+                    const text = (item.textContent || '').trim().toLowerCase();
+                    const ariaLabel = (item.getAttribute('aria-label') || '').toLowerCase();
+                    const title = (item.getAttribute('title') || '').toLowerCase();
+                    const id = (item.id || '').toLowerCase();
 
-            const result = await chatFrame.evaluate((messageText, shouldSubmit) => {
-                // ⚡ CODE NÀY CHẠY TRONG CHAT CONTEXT
-                // Terminal input KHÔNG TỒN TẠI ở đây!
+                    // Match "Go Live", "Port: XXXX", or Live Server related
+                    if (text.includes('go live') || text.includes('port:') ||
+                        ariaLabel.includes('go live') || ariaLabel.includes('live server') ||
+                        title.includes('go live') || title.includes('live server') ||
+                        id.includes('ritwickdey.liveserver') || id.includes('golive') ||
+                        text.match(/port\s*:\s*\d+/i)) {
 
-                // Simple selector (giống Shit-Chat)
-                const editor = document.querySelector('[contenteditable="true"]') ||
-                    document.querySelector('textarea');
-
-                if (!editor) {
-                    return { ok: false, reason: 'no editor found' };
-                }
-
-                // Focus
-                editor.focus();
-
-                // Inject text — must use method compatible with Lexical editor
-                if (editor.tagName === 'TEXTAREA') {
-                    // Native setter for React compatibility
-                    try {
-                        const setter = Object.getOwnPropertyDescriptor(
-                            window.HTMLTextAreaElement.prototype,
-                            "value"
-                        ).set;
-                        setter.call(editor, messageText);
-                        editor.dispatchEvent(new Event('input', { bubbles: true }));
-                    } catch (e) {
-                        editor.value = messageText;
-                        editor.dispatchEvent(new Event('input', { bubbles: true }));
-                    }
-                } else {
-                    // ContentEditable (Lexical) — execCommand does NOT work!
-                    // Lexical manages its own state tree and ignores DOM mutations.
-                    // We must use clipboard paste via DataTransfer, which Lexical handles.
-
-                    // Clear existing content first
-                    editor.focus();
-                    const selection = window.getSelection();
-                    selection.selectAllChildren(editor);
-
-                    // Method 1: Synthetic paste event with DataTransfer
-                    try {
-                        const dt = new DataTransfer();
-                        dt.setData('text/plain', messageText);
-                        const pasteEvent = new ClipboardEvent('paste', {
-                            bubbles: true,
-                            cancelable: true,
-                            clipboardData: dt
-                        });
-                        editor.dispatchEvent(pasteEvent);
-                    } catch (pasteErr) {
-                        // Method 2: InputEvent insertFromPaste (also Lexical-compatible)
-                        try {
-                            const inputEvent = new InputEvent('beforeinput', {
-                                bubbles: true,
-                                cancelable: true,
-                                inputType: 'insertText',
-                                data: messageText
-                            });
-                            editor.dispatchEvent(inputEvent);
-                        } catch (inputErr) {
-                            // Last resort: execCommand (unlikely to work)
-                            document.execCommand("selectAll", false, null);
-                            document.execCommand("insertText", false, messageText);
-                        }
+                        item.click();
+                        return {
+                            found: true,
+                            label: item.textContent?.trim() || ariaLabel || 'Go Live',
+                            wasLive: text.includes('port:') || text.match(/port\s*:\s*\d+/i) ? true : false
+                        };
                     }
                 }
+                return { found: false };
+            });
 
-                // If submit=false, just return — text is in the editor, don’t send
-                if (!shouldSubmit) {
-                    return { ok: true, method: 'inject-only', submitted: false };
-                }
-
-                // Wait a bit, then send
-                return new Promise(resolve => {
-                    setTimeout(() => {
-                        // Find submit button (simple selectors)
-                        const btn = document.querySelector('button[class*="arrow"]') ||
-                            document.querySelector('button[aria-label*="Send"]') ||
-                            document.querySelector('button[type="submit"]');
-
-                        if (btn) {
-                            btn.click();
-                            resolve({ ok: true, method: 'button-click' });
-                        } else {
-                            // Fallback: Enter key
-                            editor.dispatchEvent(new KeyboardEvent("keydown",
-                                { bubbles: true, key: "Enter", code: "Enter", keyCode: 13 }
-                            ));
-                            resolve({ ok: true, method: 'enter-key' });
-                        }
-                    }, 200);
-                });
-
-            }, text, submit);  // Pass text AND submit as arguments
-
-            if (result.ok) {
-                // Also press Enter via Puppeteer CDP keyboard (more reliable than JS dispatch)
-                // Lexical often ignores JS KeyboardEvent but responds to CDP Input events
-                // BUT ONLY if we are submitting!
-                if (submit && result.method === 'enter-key') {
-                    try {
-                        await this.page.keyboard.press('Enter');
-                        console.log(`✅ CDP: Also pressed Enter via Puppeteer keyboard`);
-                    } catch (e) { /* ignore */ }
-                }
-                console.log(`✅ CDP: ${submit ? 'Message sent' : 'Text injected'} via ${result.method}`);
-                return { success: true, submitted: !!submit, method: result.method };
-            } else {
-                console.log(`❌ CDP: Injection failed: ${result.reason}`);
-                return { success: false, error: result.reason };
+            if (result.found) {
+                const action = result.wasLive ? 'Đã tắt' : 'Đã bật';
+                console.log(`✅ CDP: Go Live clicked! (${result.label})`);
+                return { success: true, label: result.label, wasLive: result.wasLive, action };
             }
+
+            // Fallback: try VS Code command palette approach
+            console.log('⚠️ CDP: Go Live button not found in status bar, trying command...');
+            return { success: false, error: 'Không tìm thấy nút Go Live trong status bar. Kiểm tra Live Server extension đã cài chưa.' };
 
         } catch (e) {
-            console.error('❌ CDP Inject Text Error:', e.message);
+            console.error('❌ CDP Go Live Error:', e.message);
             return { success: false, error: e.message };
         }
     }
 
-    /**
- 
-     * Ngắt kết nối
-     */
     disconnect() {
         // Dừng chat polling trước
         this.stopChatPolling();

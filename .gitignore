@@ -26,3 +26,4 @@ Desktop.ini
 *.log
 npm-debug.log*
 .agent/
+AntiHook/
