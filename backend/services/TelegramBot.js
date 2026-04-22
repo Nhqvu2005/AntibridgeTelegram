@@ -296,11 +296,13 @@ class TelegramBotService {
         
         const modeArg = (match[1] || '').trim().toLowerCase();
 
-        // Xác định đường dẫn khởi động
-        let ptyPath = this.manualProjectRoot || this.currentBrowsePath;
+        // Xác định đường dẫn khởi động riêng cho Terminal
+        let ptyPath = this.terminalProjectRoot;
         if (!ptyPath && this.antigravityBridge.isConnected) {
             try { ptyPath = await this.antigravityBridge.getCurrentProjectRoot(); } catch(e) {}
         }
+        if (!ptyPath) ptyPath = process.cwd();
+        this.terminalProjectRoot = ptyPath; // Lưu lại để dùng sau
         
         if (modeArg === 'terminal') {
             this.currentMode = 'terminal';
@@ -1672,15 +1674,17 @@ ${caption ? `    # Type caption
                         await this.bot.answerCallbackQuery(query.id, { text: '📂 Đang mở dự án...' });
 
                         try {
-                            // Direct Native Launch (bypassing CDP as requested)
-                            this.manualProjectRoot = finalPath;
-                            this._saveProjectRoot(finalPath);
-                            
                             if (this.currentMode === 'terminal') {
+                                this.terminalProjectRoot = finalPath;
                                 this.terminalBridge.stop();
                                 this.terminalBridge.start(finalPath);
                                 await this.bot.sendMessage(this.chatId, `✅ Đã chuyển đổi thư mục Terminal Mode sang:\n\`${finalPath}\``, { parse_mode: 'Markdown' });
+                                return; // Dừng lại, không launch IDE!
                             }
+
+                            // Chạy tiếp luồng cho Antigravity Mode
+                            this.manualProjectRoot = finalPath;
+                            this._saveProjectRoot(finalPath);
 
                             const exePath = await this._findAntigravityExecutable();
                             let launched = false;
