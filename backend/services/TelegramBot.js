@@ -233,6 +233,7 @@ class TelegramBotService {
         this.bot.onText(/\/mode\s*(.*)/, (msg, match) => this._handleMode(msg, match));
         this.bot.onText(/\/ctrl_c/, (msg) => this._handleCtrlC(msg));
         this.bot.onText(/\/kill/, (msg) => this._handleKill(msg));
+        this.bot.onText(/\/tpad/, (msg) => this._handleTpad(msg));
     }
 
     _isAuthorized(msg) {
@@ -345,6 +346,34 @@ class TelegramBotService {
         this.terminalBridge.stop();
         this.terminalBridge.start();
         await this.sendMessage('💀 Đã ép buộc đóng và khởi động lại phiên Terminal hoàn toàn mới tại thư mục hiện tại.');
+    }
+
+    async _handleTpad(msg) {
+        if (!this._isAuthorized(msg)) return;
+        if (this.currentMode !== 'terminal') {
+            await this.sendMessage('Chỉ dùng được trong /mode terminal.');
+            return;
+        }
+
+        const keyboard = [
+            [{ text: '▲ Lên', callback_data: 'tpad_up' }],
+            [
+                { text: '◄ Trái', callback_data: 'tpad_left' },
+                { text: '▼ Xuống', callback_data: 'tpad_down' },
+                { text: '► Phải', callback_data: 'tpad_right' }
+            ],
+            [
+                { text: 'Tab ↹', callback_data: 'tpad_tab' },
+                { text: 'Enter ↵', callback_data: 'tpad_enter' },
+                { text: 'Esc', callback_data: 'tpad_esc' }
+            ],
+            [{ text: '🛑 Ctrl+C', callback_data: 'tpad_ctrlc' }]
+        ];
+
+        await this.sendMessage('⌨️ **Terminal Control Pad**\nGhim (pin) tin nhắn này lại để tiện điều hướng Terminal nhé:', {
+            parse_mode: 'Markdown',
+            reply_markup: { inline_keyboard: keyboard }
+        });
     }
 
     async _handleAccept(msg) {
@@ -1608,6 +1637,21 @@ ${caption ? `    # Type caption
                         { inline_keyboard: [[{ text: '❌ Đã Reject', callback_data: 'done' }]] },
                         { chat_id: this.chatId, message_id: query.message.message_id }
                     );
+                } else if (action.startsWith('tpad_')) {
+                    await this.bot.answerCallbackQuery(query.id);
+                    if (this.currentMode !== 'terminal') return;
+                    const cmd = action.replace('tpad_', '');
+                    console.log(`🕹️ TPad action: ${cmd}`);
+                    switch (cmd) {
+                        case 'up': this.terminalBridge.writeRaw('\x1b[A'); break;
+                        case 'down': this.terminalBridge.writeRaw('\x1b[B'); break;
+                        case 'right': this.terminalBridge.writeRaw('\x1b[C'); break;
+                        case 'left': this.terminalBridge.writeRaw('\x1b[D'); break;
+                        case 'enter': this.terminalBridge.writeRaw('\r'); break;
+                        case 'esc': this.terminalBridge.writeRaw('\x1b'); break;
+                        case 'tab': this.terminalBridge.writeRaw('\t'); break;
+                        case 'ctrlc': this.terminalBridge.sendCtrlC(); break;
+                    }
                 } else if (action === 'stop_generation') {
                     await this.antigravityBridge.stopGeneration();
                     await this.bot.answerCallbackQuery(query.id, { text: '⏹️ Stopped!' });

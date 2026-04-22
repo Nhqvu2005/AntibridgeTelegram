@@ -81,6 +81,12 @@ class TerminalBridge {
         this.ptyProcess.write(text + '\r');
     }
 
+    writeRaw(data) {
+        if (!this.ptyProcess) this.start();
+        // Không reset activeMsgId để tránh tạo tin nhắn mới liên tục khi bấm phím điều hướng
+        this.ptyProcess.write(data);
+    }
+
     sendCtrlC() {
         if (!this.ptyProcess) return;
         this.ptyProcess.write('\x03');
