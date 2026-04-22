@@ -232,6 +232,7 @@ class TelegramBotService {
         this.bot.onText(/\/runaccept/, (msg) => this._handleRunAccept(msg));
         this.bot.onText(/\/mode\s*(.*)/, (msg, match) => this._handleMode(msg, match));
         this.bot.onText(/\/ctrl_c/, (msg) => this._handleCtrlC(msg));
+        this.bot.onText(/\/kill/, (msg) => this._handleKill(msg));
     }
 
     _isAuthorized(msg) {
@@ -333,6 +334,17 @@ class TelegramBotService {
             return;
         }
         this.terminalBridge.sendCtrlC();
+    }
+
+    async _handleKill(msg) {
+        if (!this._isAuthorized(msg)) return;
+        if (this.currentMode !== 'terminal') {
+            await this.sendMessage('Chỉ dùng được trong /mode terminal.');
+            return;
+        }
+        this.terminalBridge.stop();
+        this.terminalBridge.start();
+        await this.sendMessage('💀 Đã ép buộc đóng và khởi động lại phiên Terminal hoàn toàn mới tại thư mục hiện tại.');
     }
 
     async _handleAccept(msg) {
