@@ -1,5 +1,5 @@
 const pty = require('node-pty');
-const { Terminal } = require('xterm-headless');
+const { Terminal } = require('@xterm/headless');
 
 class TerminalBridge {
     constructor(telegramBotService) {
