@@ -9,6 +9,7 @@ const { spawn, exec, execSync } = require('child_process');
 const path = require('path');
 const fs = require('fs');
 const QuotaService = require('./QuotaService');
+const TerminalBridge = require('./TerminalBridge');
 
 class TelegramBotService {
     constructor({ botToken, chatId, antigravityBridge, acceptDetector, messageLogger, eventBus }) {
@@ -27,6 +28,9 @@ class TelegramBotService {
         this.streamingTimeout = null;
         this.lastSentText = '';
         this.isProcessing = false;
+
+        this.currentMode = 'antigravity'; // 'antigravity' or 'terminal'
+        this.terminalBridge = new TerminalBridge(this);
 
         // Cloudflare Tunnel state: Map<port, { process, url }>
         this._tunnels = new Map();
@@ -198,6 +202,8 @@ class TelegramBotService {
             { command: 'stoptunnel', description: '🔴 Tắt tunnel (vd: /stoptunnel 3000)' },
             { command: 'golive', description: '🔴 Toggle Live Server (Go Live)' },
             { command: 'runaccept', description: '🚀 Run/Accept (Alt+Enter)' },
+            { command: 'mode', description: '🔀 Đổi chế độ: /mode antigravity hoặc /mode terminal' },
+            { command: 'ctrl_c', description: '🛑 Gửi Ctrl+C tới Terminal' },
         ]);
 
         this.bot.onText(/\/start/, (msg) => this._handleStart(msg));
@@ -224,6 +230,8 @@ class TelegramBotService {
         this.bot.onText(/\/tunnel$/, (msg) => this._handleTunnel(msg, null));
         this.bot.onText(/\/golive/, (msg) => this._handleGoLive(msg));
         this.bot.onText(/\/runaccept/, (msg) => this._handleRunAccept(msg));
+        this.bot.onText(/\/mode\s*(.*)/, (msg, match) => this._handleMode(msg, match));
+        this.bot.onText(/\/ctrl_c/, (msg) => this._handleCtrlC(msg));
     }
 
     _isAuthorized(msg) {
@@ -242,7 +250,8 @@ class TelegramBotService {
             `⏹️ /stop - Stop generation\n` +
             `🎨 /model <name> - Đổi model\n` +
             `📸 /screenshot - Chụp màn hình\n` +
-            `📊 /status - Kiểm tra kết nối`,
+            `📊 /status - Kiểm tra kết nối\n\n` +
+            `🔀 *Modes:*\n/mode antigravity - Điều khiển IDE\n/mode terminal - Mở PowerShell/Claude`,
             { parse_mode: 'Markdown' }
         );
     }
@@ -270,13 +279,58 @@ class TelegramBotService {
 
         const detectorStats = this.acceptDetector?.getStats?.() || {};
 
+        const modeStr = this.currentMode === 'terminal' ? '💻 Terminal' : '🌌 Antigravity IDE';
+
         await this.sendMessage(
             `📊 *Trạng thái hệ thống*\n\n` +
+            `🔀 Mode: ${modeStr}\n` +
             `🔌 CDP: ${cdpConnected ? '✅ Connected' : '❌ Disconnected'}\n` +
             `🤖 Bot: ✅ Online${stateInfo}\n` +
             `🎯 Detector: ${detectorStats.running ? '✅ Running' : '⏹️ Stopped'}`,
             { parse_mode: 'Markdown' }
         );
+    }
+
+    async _handleMode(msg, match) {
+        if (!this._isAuthorized(msg)) return;
+        
+        const modeArg = (match[1] || '').trim().toLowerCase();
+
+        // Xác định đường dẫn khởi động
+        let ptyPath = this.manualProjectRoot || this.currentBrowsePath;
+        if (!ptyPath && this.antigravityBridge.isConnected) {
+            try { ptyPath = await this.antigravityBridge.getCurrentProjectRoot(); } catch(e) {}
+        }
+        
+        if (modeArg === 'terminal') {
+            this.currentMode = 'terminal';
+            this.terminalBridge.start(ptyPath);
+            await this.sendMessage(`💻 Đã chuyển sang chế độ **Terminal Mode**.\n📁 Dir: \`${ptyPath || 'default'}\`\nGõ lệnh trực tiếp vào đây (vd: \`claude\` hoặc \`ls\`). Dùng /ctrl_c để ngắt lệnh.`, { parse_mode: 'Markdown' });
+        } else if (modeArg === 'antigravity') {
+            this.currentMode = 'antigravity';
+            this.terminalBridge.stop();
+            await this.sendMessage('🌌 Đã chuyển sang chế độ **Antigravity Mode**.');
+        } else {
+            // Toggle
+            if (this.currentMode === 'antigravity') {
+                this.currentMode = 'terminal';
+                this.terminalBridge.start(ptyPath);
+                await this.sendMessage(`💻 Đã chuyển sang chế độ **Terminal Mode**.\n📁 Dir: \`${ptyPath || 'default'}\`\nGõ lệnh trực tiếp vào đây. Dùng /ctrl_c để ngắt lệnh.`, { parse_mode: 'Markdown' });
+            } else {
+                this.currentMode = 'antigravity';
+                this.terminalBridge.stop();
+                await this.sendMessage('🌌 Đã chuyển sang chế độ **Antigravity Mode**.');
+            }
+        }
+    }
+
+    async _handleCtrlC(msg) {
+        if (!this._isAuthorized(msg)) return;
+        if (this.currentMode !== 'terminal') {
+            await this.sendMessage('Chỉ dùng được trong /mode terminal.');
+            return;
+        }
+        this.terminalBridge.sendCtrlC();
     }
 
     async _handleAccept(msg) {
@@ -1201,6 +1255,13 @@ class TelegramBotService {
             // ========== HANDLE TEXT-ONLY (existing flow) ==========
             if (!text) return;
 
+            // ===== TERMINAL MODE ROUTING =====
+            if (this.currentMode === 'terminal') {
+                console.log(`📱 [Terminal] Sending text: "${text.substring(0, 50)}..."`);
+                this.terminalBridge.write(text);
+                return;
+            }
+
             console.log(`📱 Sending text: "${text.substring(0, 50)}..."`);
 
             // Send status
@@ -1614,6 +1675,12 @@ ${caption ? `    # Type caption
                             // Direct Native Launch (bypassing CDP as requested)
                             this.manualProjectRoot = finalPath;
                             this._saveProjectRoot(finalPath);
+                            
+                            if (this.currentMode === 'terminal') {
+                                this.terminalBridge.stop();
+                                this.terminalBridge.start(finalPath);
+                                await this.bot.sendMessage(this.chatId, `✅ Đã chuyển đổi thư mục Terminal Mode sang:\n\`${finalPath}\``, { parse_mode: 'Markdown' });
+                            }
 
                             const exePath = await this._findAntigravityExecutable();
                             let launched = false;

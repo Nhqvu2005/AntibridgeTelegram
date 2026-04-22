@@ -14,10 +14,10 @@ class TerminalBridge {
         this.rows = 150; // Cho Terminal dài ra để chứa nội dung
     }
 
-    start() {
+    start(cwdPath) {
         if (this.ptyProcess) return;
 
-        console.log('🖥️ Khởi động Terminal Mode (xterm-headless)...');
+        console.log(`🖥️ Khởi động Terminal Mode tại ${cwdPath || process.cwd()}...`);
         const shell = process.platform === 'win32' ? 'powershell.exe' : 'bash';
 
         // Khởi tạo xterm headless engine giả lập môi trường terminal
@@ -32,7 +32,7 @@ class TerminalBridge {
             name: 'xterm-256color',
             cols: this.cols,
             rows: this.rows,
-            cwd: process.cwd(),
+            cwd: cwdPath || process.cwd(),
             env: process.env // Cứ xài full VT100
         });
 

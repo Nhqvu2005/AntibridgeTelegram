@@ -1685,13 +1685,23 @@ class AntigravityBridge {
             await this.page.keyboard.press('Backspace');
             await new Promise(r => setTimeout(r, 50));
 
-            // 3. Insert text via clipboard (fast!) instead of char-by-char typing
+            // 3. Insert text
             await frame.evaluate((txt) => {
                 const input = document.activeElement;
                 if (input && (input.tagName === 'TEXTAREA' || input.isContentEditable)) {
-                    // Use execCommand for contenteditable, value setter for textarea
                     if (input.isContentEditable) {
-                        document.execCommand('insertText', false, txt);
+                        // Tạo sự kiện paste giả lập để bắt các trình soạn thảo xịn (như Lexical/Monaco) nhận diện xuống dòng (\n)
+                        const pasteEvent = new ClipboardEvent('paste', {
+                            bubbles: true,
+                            cancelable: true,
+                            clipboardData: new DataTransfer()
+                        });
+                        pasteEvent.clipboardData.setData('text/plain', txt);
+                        
+                        // Nếu event không bị chặn (defaultPrevented), fall back về insertText
+                        if (input.dispatchEvent(pasteEvent)) {
+                            document.execCommand('insertText', false, txt);
+                        }
                     } else {
                         const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value').set;
                         nativeSetter.call(input, txt);
