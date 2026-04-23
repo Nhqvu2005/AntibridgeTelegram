@@ -73,9 +73,6 @@ class TerminalBridge {
 
     write(text) {
         if (!this.ptyProcess) this.start();
-        
-        // Reset active tracking khi gửi lệnh mới để Telegram mở tin nhắn mới
-        this.activeMsgId = null;
 
         // Gửi text trước (giả lập thao tác paste)
         this.ptyProcess.write(text);
@@ -142,11 +139,12 @@ class TerminalBridge {
                 const msg = await this.telegramBot.bot.sendMessage(this.telegramBot.chatId, markdownDisplay, { parse_mode: 'MarkdownV2' });
                 this.activeMsgId = msg.message_id;
             } catch (e) {
-                // Fallback nếu có lỗi kí tự
                 try {
                     const msg = await this.telegramBot.bot.sendMessage(this.telegramBot.chatId, display);
                     this.activeMsgId = msg.message_id;
-                } catch(err2) {}
+                } catch(err2) {
+                    console.error("❌ Lỗi sendMessage (mã gốc):", err2.message);
+                }
             }
         } else {
             try {
@@ -157,7 +155,6 @@ class TerminalBridge {
                 });
             } catch (e) {
                 if (!e.message.includes('not modified')) {
-                    // Update thất bại do message_id cũ quá hoặc Markdown lỗi
                     try {
                         const msg = await this.telegramBot.bot.sendMessage(this.telegramBot.chatId, markdownDisplay, { parse_mode: 'MarkdownV2' });
                         this.activeMsgId = msg.message_id;
@@ -165,7 +162,9 @@ class TerminalBridge {
                         try {
                             const msg = await this.telegramBot.bot.sendMessage(this.telegramBot.chatId, display);
                             this.activeMsgId = msg.message_id;
-                        } catch(err3) {}
+                        } catch(err3) {
+                            console.error("❌ Lỗi editMessage/fallback sendMessage do Rate Limit hoặc Network:", err3.message);
+                        }
                     }
                 }
             }
