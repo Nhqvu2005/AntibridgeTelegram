@@ -77,8 +77,14 @@ class TerminalBridge {
         // Reset active tracking khi gửi lệnh mới để Telegram mở tin nhắn mới
         this.activeMsgId = null;
 
-        // Gửi lệnh kèm Enter
-        this.ptyProcess.write(text + '\r');
+        // Gửi text trước (giả lập thao tác paste)
+        this.ptyProcess.write(text);
+        
+        // Gửi phím Enter (\r) cắm đuôi sau một khoảng delay nhỏ
+        // Việc này giúp các TUI xịn (như Claude Code / Inquirer) không hiểu lầm \r là một phần của chuỗi paste
+        setTimeout(() => {
+            if (this.ptyProcess) this.ptyProcess.write('\r');
+        }, 100);
     }
 
     writeRaw(data) {
