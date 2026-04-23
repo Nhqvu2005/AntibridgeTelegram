@@ -69,6 +69,8 @@ class TerminalBridge {
             this.term = null;
         }
         this.isActive = false;
+    }
+
     write(text) {
         if (!this.ptyProcess) this.start();
         
