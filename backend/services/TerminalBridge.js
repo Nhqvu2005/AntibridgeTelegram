@@ -69,10 +69,11 @@ class TerminalBridge {
             this.term = null;
         }
         this.isActive = false;
-    }
-
     write(text) {
         if (!this.ptyProcess) this.start();
+        
+        // Cố tình xoá activeMsgId để lệnh chat mới luôn sinh ra một Bubble Terminal mới ở dưới cùng
+        this.activeMsgId = null;
 
         // Gửi text trước (giả lập thao tác paste)
         this.ptyProcess.write(text);
@@ -86,7 +87,7 @@ class TerminalBridge {
 
     writeRaw(data) {
         if (!this.ptyProcess) this.start();
-        // Không reset activeMsgId để tránh tạo tin nhắn mới liên tục khi bấm phím điều hướng
+        // Không reset activeMsgId để tránh tạo tin nhắn mới liên tục khi bấm phím điều hướng tpad
         this.ptyProcess.write(data);
     }
 
@@ -107,67 +108,73 @@ class TerminalBridge {
 
     async flushOutput() {
         if (!this.term) return;
+        if (this.isFlushing) return; // Khoá chống race-condition
+        this.isFlushing = true;
 
-        // Trích xuất buffer màn hình đã render hoàn chỉnh từ xterm-headless
-        let lines = [];
-        const buffer = this.term.buffer.active;
-        for (let i = 0; i < buffer.length; i++) {
-            const line = buffer.getLine(i);
-            if (line) {
-                // Lấy nội dung hiển thị text trên dòng đó, translateToString(true) cắt bỏ space thừa bên phải
-                lines.push(line.translateToString(true));
-            }
-        }
-
-        // Tạo raw text và xoá các dòng trống thừa phía dưới cùng màn hình
-        let display = lines.join('\n').replace(/\n+$/, '');
-        
-        // Cân nhắc xoá ký tự unicode GUI box nếu Telegram font bị lỗi lệch (tuỳ chọn)
-        display = display.replace(/[\u2500-\u257F\u25A0-\u25FF\u2600-\u26FF\u2800-\u28FF\u2190-\u21FF╭─╮│╰╯]/g, '');
-
-        if (!display.trim()) return;
-
-        // Giữ tối đa 3800 kí tự cuối (trong hạn mức 4096 của Telegram)
-        if (display.length > 3800) {
-            display = display.substring(display.length - 3800);
-        }
-
-        const markdownDisplay = `\`\`\`\n${display}\n\`\`\``;
-
-        if (!this.activeMsgId) {
-            try {
-                const msg = await this.telegramBot.bot.sendMessage(this.telegramBot.chatId, markdownDisplay, { parse_mode: 'MarkdownV2' });
-                this.activeMsgId = msg.message_id;
-            } catch (e) {
-                try {
-                    const msg = await this.telegramBot.bot.sendMessage(this.telegramBot.chatId, display);
-                    this.activeMsgId = msg.message_id;
-                } catch(err2) {
-                    console.error("❌ Lỗi sendMessage (mã gốc):", err2.message);
+        try {
+            // Trích xuất buffer màn hình đã render hoàn chỉnh từ xterm-headless
+            let lines = [];
+            const buffer = this.term.buffer.active;
+            for (let i = 0; i < buffer.length; i++) {
+                const line = buffer.getLine(i);
+                if (line) {
+                    // Lấy nội dung hiển thị text trên dòng đó, translateToString(true) cắt bỏ space thừa bên phải
+                    lines.push(line.translateToString(true));
                 }
             }
-        } else {
-            try {
-                await this.telegramBot.bot.editMessageText(markdownDisplay, {
-                    chat_id: this.telegramBot.chatId,
-                    message_id: this.activeMsgId,
-                    parse_mode: 'MarkdownV2'
-                });
-            } catch (e) {
-                if (!e.message.includes('not modified')) {
+
+            // Tạo raw text và xoá các dòng trống thừa phía dưới cùng màn hình
+            let display = lines.join('\n').replace(/\n+$/, '');
+            
+            // Cân nhắc xoá ký tự unicode GUI box nếu Telegram font bị lỗi lệch (tuỳ chọn)
+            display = display.replace(/[\u2500-\u257F\u25A0-\u25FF\u2600-\u26FF\u2800-\u28FF\u2190-\u21FF╭─╮│╰╯]/g, '');
+
+            if (!display.trim()) return;
+
+            // Giữ tối đa 3800 kí tự cuối (trong hạn mức 4096 của Telegram)
+            if (display.length > 3800) {
+                display = display.substring(display.length - 3800);
+            }
+
+            const markdownDisplay = `\`\`\`\n${display}\n\`\`\``;
+
+            if (!this.activeMsgId) {
+                try {
+                    const msg = await this.telegramBot.bot.sendMessage(this.telegramBot.chatId, markdownDisplay, { parse_mode: 'MarkdownV2' });
+                    this.activeMsgId = msg.message_id;
+                } catch (e) {
                     try {
-                        const msg = await this.telegramBot.bot.sendMessage(this.telegramBot.chatId, markdownDisplay, { parse_mode: 'MarkdownV2' });
+                        const msg = await this.telegramBot.bot.sendMessage(this.telegramBot.chatId, display);
                         this.activeMsgId = msg.message_id;
                     } catch(err2) {
+                        console.error("❌ Lỗi sendMessage (mã gốc):", err2.message);
+                    }
+                }
+            } else {
+                try {
+                    await this.telegramBot.bot.editMessageText(markdownDisplay, {
+                        chat_id: this.telegramBot.chatId,
+                        message_id: this.activeMsgId,
+                        parse_mode: 'MarkdownV2'
+                    });
+                } catch (e) {
+                    if (!e.message.includes('not modified')) {
                         try {
-                            const msg = await this.telegramBot.bot.sendMessage(this.telegramBot.chatId, display);
+                            const msg = await this.telegramBot.bot.sendMessage(this.telegramBot.chatId, markdownDisplay, { parse_mode: 'MarkdownV2' });
                             this.activeMsgId = msg.message_id;
-                        } catch(err3) {
-                            console.error("❌ Lỗi editMessage/fallback sendMessage do Rate Limit hoặc Network:", err3.message);
+                        } catch(err2) {
+                            try {
+                                const msg = await this.telegramBot.bot.sendMessage(this.telegramBot.chatId, display);
+                                this.activeMsgId = msg.message_id;
+                            } catch(err3) {
+                                console.error("❌ Lỗi editMessage/fallback:", err3.message);
+                            }
                         }
                     }
                 }
             }
+        } finally {
+            this.isFlushing = false;
         }
     }
 }
