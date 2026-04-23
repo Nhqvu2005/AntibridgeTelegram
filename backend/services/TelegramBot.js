@@ -1176,13 +1176,18 @@ class TelegramBotService {
 
     _setupMessageHandler() {
         this.bot.on('message', async (msg) => {
-            // Skip commands
-            if (msg.text?.startsWith('/')) return;
             if (!this._isAuthorized(msg)) return;
 
-            // Determine if this is a text message, photo, or neither
+            let text = (msg.text || msg.caption || '').trim();
             const hasPhoto = msg.photo && msg.photo.length > 0;
-            const text = (msg.text || msg.caption || '').trim();
+
+            // Xử lý Escape: nếu nhắn // thì sẽ gửi kí tự / vào Terminal hoặc Antigravity
+            if (text.startsWith('//')) {
+                text = text.substring(1);
+            } else if (text.startsWith('/')) {
+                // Nếu chỉ là / thông thường (bot command), nhường cho các handler xử lý
+                return;
+            }
 
             // Skip if no text AND no photo
             if (!text && !hasPhoto) return;
