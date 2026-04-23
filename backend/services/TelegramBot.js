@@ -206,6 +206,7 @@ class TelegramBotService {
             { command: 'ctrl_c', description: '🛑 Gửi Ctrl+C tới Terminal' },
             { command: 'tpad', description: '🕹️ Mở Control Pad (Điều hướng bằng phím)' },
             { command: 'kill', description: '☠️ Khởi động lại (Kill) Terminal bị nghẽn' },
+            { command: 'claude_cmd', description: '💡 Lấy danh sách lệnh gợi ý từ Claude CLI' },
         ]);
 
         this.bot.onText(/\/start/, (msg) => this._handleStart(msg));
@@ -236,6 +237,7 @@ class TelegramBotService {
         this.bot.onText(/\/ctrl_c/, (msg) => this._handleCtrlC(msg));
         this.bot.onText(/\/kill/, (msg) => this._handleKill(msg));
         this.bot.onText(/\/tpad/, (msg) => this._handleTpad(msg));
+        this.bot.onText(/\/claude_cmd(?:\s+(.*))?/, (msg, match) => this._handleClaudeCmd(msg, match));
     }
 
     _isAuthorized(msg) {
@@ -374,6 +376,57 @@ class TelegramBotService {
 
         await this.sendMessage('⌨️ **Terminal Control Pad**\nGhim (pin) tin nhắn này lại để tiện điều hướng Terminal nhé:', {
             parse_mode: 'Markdown',
+            reply_markup: { inline_keyboard: keyboard }
+        });
+    }
+
+    async _handleClaudeCmd(msg, match) {
+        if (!this._isAuthorized(msg)) return;
+        if (this.currentMode !== 'terminal') {
+            await this.sendMessage('Chỉ dùng được trong /mode terminal.');
+            return;
+        }
+
+        const typedArg = (match[1] || '').trim();
+        const cmdToType = '/' + typedArg;
+
+        await this.sendMessage('🔍 Đang lấy gợi ý từ Terminal...');
+
+        // Gõ lệnh dở dang vào Terminal nhưng KHÔNG bấm Enter (writeRaw)
+        this.terminalBridge.writeRaw(cmdToType);
+
+        // Đợi 800ms để Claude CLI kịp re-render UI Autocomplete
+        await new Promise(r => setTimeout(r, 800));
+
+        // Trích xuất văn bản từ màn hình hiển thị
+        const display = this.terminalBridge.getDisplay();
+        
+        // Scan tìm các từ bắt đầu bằng / (chuẩn Claude CLI)
+        const regex = /(?:\r?\n|\r|^)\s*(\/[a-zA-Z0-9_\-]+)/g;
+        const matches = [];
+        let m;
+        while ((m = regex.exec(display)) !== null) {
+            matches.push(m[1]);
+        }
+
+        const uniqueCmds = [...new Set(matches)]; // Loại trùng lặp
+
+        // Phải bắt đầu bằng chuỗi người dùng đã nhập
+        const validCmds = uniqueCmds.filter(c => c.startsWith(cmdToType) && c.length > cmdToType.length);
+
+        if (validCmds.length === 0) {
+            await this.sendMessage('⚠️ Không tìm thấy gợi ý nào tương ứng với lệnh này.');
+            this.terminalBridge.sendCtrlC(); // Huỷ prompt vừa nhập
+            return;
+        }
+
+        const keyboard = [];
+        for (const cmd of validCmds) {
+            // Cắt bớt dấu gạch chéo để tiết kiệm byte cho callback_data
+            keyboard.push([{ text: cmd, callback_data: `cl_cmd_${cmd.substring(1)}` }]);
+        }
+
+        await this.sendMessage(`💻 Gợi ý nội bộ cho "${cmdToType}":`, {
             reply_markup: { inline_keyboard: keyboard }
         });
     }
@@ -1659,6 +1712,21 @@ ${caption ? `    # Type caption
                         case 'tab': this.terminalBridge.writeRaw('\t'); break;
                         case 'ctrlc': this.terminalBridge.sendCtrlC(); break;
                     }
+                } else if (action.startsWith('cl_cmd_')) {
+                    if (this.currentMode !== 'terminal') return;
+                    const cmd = '/' + action.replace('cl_cmd_', '');
+                    
+                    // Xóa dòng gõ dở dang trên Terminal
+                    this.terminalBridge.sendCtrlC();
+                    
+                    // Gõ lệnh hoàn chỉnh và ấn Enter ngay lập tức
+                    await new Promise(r => setTimeout(r, 200)); 
+                    this.terminalBridge.write(cmd);
+                    
+                    await this.bot.answerCallbackQuery(query.id, { text: `✅ Đã chạy: ${cmd}` });
+                    
+                    // Gỡ bỏ Inline Keyboard vì action đã consume
+                    await this.bot.editMessageReplyMarkup({ inline_keyboard: [] }, { chat_id: this.chatId, message_id: query.message.message_id });
                 } else if (action === 'stop_generation') {
                     await this.antigravityBridge.stopGeneration();
                     await this.bot.answerCallbackQuery(query.id, { text: '⏹️ Stopped!' });
