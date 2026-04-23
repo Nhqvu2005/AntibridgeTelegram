@@ -204,6 +204,8 @@ class TelegramBotService {
             { command: 'runaccept', description: '🚀 Run/Accept (Alt+Enter)' },
             { command: 'mode', description: '🔀 Đổi chế độ: /mode antigravity hoặc /mode terminal' },
             { command: 'ctrl_c', description: '🛑 Gửi Ctrl+C tới Terminal' },
+            { command: 'tpad', description: '🕹️ Mở Control Pad (Điều hướng bằng phím)' },
+            { command: 'kill', description: '☠️ Khởi động lại (Kill) Terminal bị nghẽn' },
         ]);
 
         this.bot.onText(/\/start/, (msg) => this._handleStart(msg));
