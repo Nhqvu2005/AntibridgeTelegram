@@ -153,7 +153,11 @@ class TerminalBridge {
             display = display.substring(display.length - 3800);
         }
 
-        const markdownDisplay = `\`\`\`\n${display}\n\`\`\``;
+        // Với MarkdownV2 của Telegram, nếu ở bên trong thẻ code block (```), 
+        // ta BẮT BUỘC phải escape tất cả các kí tự xuyệt chéo (\) và dấu tick ngược (`)
+        // Nếu không escape, Telegram sẽ báo lỗi Parse và quăng qua Catch -> gửi thành dạng plain text xấu xí
+        const safeDisplay = display.replace(/\\/g, '\\\\').replace(/`/g, '\\`');
+        const markdownDisplay = `\`\`\`\n${safeDisplay}\n\`\`\``;
 
         if (!this.activeMsgId) {
             try {
