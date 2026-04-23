@@ -101,11 +101,14 @@ class TerminalBridge {
 
     scheduleFlush() {
         this.needsFlush = true;
-        this.processFlushQueue();
+        // Chỉ chạy ngay nếu không bị khoá bởi API hoặc Cooldown
+        if (!this.isFlushing && !this.debounceTimeout) {
+            this.processFlushQueue();
+        }
     }
 
     async processFlushQueue() {
-        if (this.isFlushing || !this.needsFlush) return;
+        if (!this.needsFlush) return;
 
         this.isFlushing = true;
         this.needsFlush = false;
@@ -113,16 +116,16 @@ class TerminalBridge {
         try {
             await this.flushOutput();
         } finally {
-            this.isFlushing = false;
-            
-            // Nếu trong lúc API Telegram đang gửi, màn hình Terminal lại có data mới
-            // thì hẹn 1 giây sau đó tiếp tục gửi lên để báo cáo đúng tiến độ mà không bị Telegram khoá
-            if (this.needsFlush) {
-                if (this.debounceTimeout) clearTimeout(this.debounceTimeout);
-                this.debounceTimeout = setTimeout(() => {
+            // Sau khi xả API xong, thiết lập Cooldown cứng 1 giây để chống Telegram Rate Limit
+            this.debounceTimeout = setTimeout(() => {
+                this.debounceTimeout = null;
+                this.isFlushing = false; // Mở khoá
+                
+                // Đủ 1 giây ngơi nghỉ, nếu còn hàng tồn đọng thì đẩy tiếp
+                if (this.needsFlush) {
                     this.processFlushQueue();
-                }, this.flushInterval);
-            }
+                }
+            }, this.flushInterval);
         }
     }
 
