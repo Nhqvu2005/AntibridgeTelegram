@@ -9,7 +9,7 @@ class TerminalBridge {
         this.debounceTimeout = null;
         this.activeMsgId = null;
         this.isActive = false;
-        this.flushInterval = 1000; // Cập nhật màn hình 1s/lần
+        this.flushInterval = 2000; // Cập nhật màn hình 2s/lần
         this.cols = 80;
         this.rows = 150; // Cho Terminal dài ra để chứa nội dung
     }
