@@ -129,8 +129,8 @@ class TerminalBridge {
         }
     }
 
-    async flushOutput() {
-        if (!this.term) return;
+    getDisplay() {
+        if (!this.term) return '';
 
         // Trích xuất buffer màn hình đã render hoàn chỉnh từ xterm-headless
         let lines = [];
@@ -145,8 +145,13 @@ class TerminalBridge {
         // Tạo raw text và xoá các dòng trống thừa phía dưới cùng
         let display = lines.join('\n').replace(/\n+$/, '');
         display = display.replace(/[\u2500-\u257F\u25A0-\u25FF\u2600-\u26FF\u2800-\u28FF\u2190-\u21FF╭─╮│╰╯]/g, '');
+        
+        return display;
+    }
 
-        if (!display.trim()) return;
+    async flushOutput() {
+        const display = this.getDisplay();
+        if (!display || !display.trim()) return;
 
         // Giữ tối đa 3800 kí tự cuối (Telegram limit 4096)
         if (display.length > 3800) {
