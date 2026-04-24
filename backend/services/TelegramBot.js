@@ -382,59 +382,64 @@ class TelegramBotService {
 
     async _handleClaudeCmd(msg, match) {
         if (!this._isAuthorized(msg)) return;
-        if (this.currentMode !== 'terminal') {
-            await this.sendMessage('Chỉ dùng được trong /mode terminal.');
-            return;
-        }
+        try {
+            if (this.currentMode !== 'terminal') {
+                await this.sendMessage('Chỉ dùng được trong /mode terminal.');
+                return;
+            }
 
-        const typedArg = (match[1] || '').trim();
-        const cmdToType = '/' + typedArg;
+            const typedArg = (match[1] || '').trim();
+            const cmdToType = '/' + typedArg;
 
-        await this.sendMessage('🔍 Đang lấy gợi ý từ Terminal...');
+            await this.sendMessage('🔍 Đang lấy gợi ý từ Terminal...');
 
-        // Gõ lệnh dở dang vào Terminal nhưng KHÔNG bấm Enter (writeRaw)
-        this.terminalBridge.writeRaw(cmdToType);
+            // Gõ lệnh dở dang vào Terminal nhưng KHÔNG bấm Enter (writeRaw)
+            this.terminalBridge.writeRaw(cmdToType);
 
-        // Đợi 800ms để Claude CLI kịp re-render UI Autocomplete
-        await new Promise(r => setTimeout(r, 800));
+            // Đợi 800ms để Claude CLI kịp re-render UI Autocomplete
+            await new Promise(r => setTimeout(r, 800));
 
-        // Trích xuất văn bản từ màn hình hiển thị
-        const display = this.terminalBridge.getDisplay();
-        
-        // Scan tìm các từ bắt đầu bằng / (chuẩn Claude CLI)
-        const regex = /(?:\r?\n|\r|^)\s*(\/[a-zA-Z0-9_\-]+)/g;
-        const matches = [];
-        let m;
-        while ((m = regex.exec(display)) !== null) {
-            matches.push(m[1]);
-        }
-
-        const uniqueCmds = [...new Set(matches)]; // Loại trùng lặp
-
-        // Phải bắt đầu bằng chuỗi người dùng đã nhập
-        const validCmds = uniqueCmds.filter(c => c.startsWith(cmdToType) && c.length > cmdToType.length);
-
-        if (validCmds.length === 0) {
-            await this.sendMessage('⚠️ Không tìm thấy gợi ý nào tương ứng với lệnh này.');
+            // Trích xuất văn bản từ màn hình hiển thị
+            const display = this.terminalBridge.getDisplay();
             
-            // LỖI WINDOWS PTY: Gửi \x03 (Ctrl+C) vào node-pty trên Windows có thể vô tình giết luôn parent Node.js.
-            // Giải pháp an toàn nhất là gửi phím Backspace (\b) đúng bằng số kí tự đã nhập để xoá chữ!
-            this.terminalBridge.writeRaw('\b'.repeat(cmdToType.length));
-            return;
+            // Scan tìm các từ bắt đầu bằng / (chuẩn Claude CLI)
+            const regex = /(?:\r?\n|\r|^)\s*(\/[a-zA-Z0-9_\-]+)/g;
+            const matches = [];
+            let m;
+            while ((m = regex.exec(display)) !== null) {
+                matches.push(m[1]);
+            }
+
+            const uniqueCmds = [...new Set(matches)]; // Loại trùng lặp
+
+            // Phải bắt đầu bằng chuỗi người dùng đã nhập
+            const validCmds = uniqueCmds.filter(c => c.startsWith(cmdToType) && c.length > cmdToType.length);
+
+            if (validCmds.length === 0) {
+                await this.sendMessage('⚠️ Không tìm thấy gợi ý nào tương ứng với lệnh này.');
+                
+                // LỖI WINDOWS PTY: Gửi \x03 (Ctrl+C) vào node-pty trên Windows có thể vô tình giết luôn parent Node.js.
+                // Giải pháp an toàn nhất là gửi phím Backspace (\b) đúng bằng số kí tự đã nhập để xoá chữ!
+                this.terminalBridge.writeRaw('\b'.repeat(cmdToType.length));
+                return;
+            }
+
+            const keyboard = [];
+            for (const cmd of validCmds) {
+                // Cắt bớt dấu gạch chéo để tiết kiệm byte cho callback_data
+                keyboard.push([{ text: cmd, callback_data: `cl_cmd_${cmd.substring(1)}` }]);
+            }
+
+            // Lưu lại độ dài vừa gõ để xíu bấm nút thì lấy Backspace xoá đúng số kĩ tự này
+            this._lastClaudeCmdLength = cmdToType.length;
+
+            await this.sendMessage(`💻 Gợi ý nội bộ cho "${cmdToType}":`, {
+                reply_markup: { inline_keyboard: keyboard }
+            });
+        } catch (e) {
+            console.error('ClaudeCmd Error:', e);
+            await this.sendMessage(`❌ Lỗi ClaudeCmd: ${e.message}\n\`\`\`js\n${e.stack}\n\`\`\``);
         }
-
-        const keyboard = [];
-        for (const cmd of validCmds) {
-            // Cắt bớt dấu gạch chéo để tiết kiệm byte cho callback_data
-            keyboard.push([{ text: cmd, callback_data: `cl_cmd_${cmd.substring(1)}` }]);
-        }
-
-        // Lưu lại độ dài vừa gõ để xíu bấm nút thì lấy Backspace xoá đúng số kĩ tự này
-        this._lastClaudeCmdLength = cmdToType.length;
-
-        await this.sendMessage(`💻 Gợi ý nội bộ cho "${cmdToType}":`, {
-            reply_markup: { inline_keyboard: keyboard }
-        });
     }
 
     async _handleAccept(msg) {

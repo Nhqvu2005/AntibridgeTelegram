@@ -14,7 +14,7 @@ echo.
 echo [%date% %time%] Starting Telegram Server...
 echo.
 
-node backend/telegram-server.js
+node backend/telegram-server.js >> bot_crash_log.txt 2>&1
 
 echo.
 echo [%date% %time%] Bot exited. Restarting in 3 seconds...
