@@ -415,12 +415,12 @@ class TelegramBotService {
             // Phải bắt đầu bằng chuỗi người dùng đã nhập
             const validCmds = uniqueCmds.filter(c => c.startsWith(cmdToType) && c.length > cmdToType.length);
 
+            // Bất kể có tìm thấy hay không, luôn luôn CHỦ ĐỘNG XOÁ dòng nháp vừa gõ trên Terminal
+            // bằng đúng số lượng con chữ đã gõ, trả lại không gian sạch sẽ!
+            this.terminalBridge.writeRaw('\b'.repeat(cmdToType.length));
+
             if (validCmds.length === 0) {
                 await this.sendMessage('⚠️ Không tìm thấy gợi ý nào tương ứng với lệnh này.');
-                
-                // LỖI WINDOWS PTY: Gửi \x03 (Ctrl+C) vào node-pty trên Windows có thể vô tình giết luôn parent Node.js.
-                // Giải pháp an toàn nhất là gửi phím Backspace (\b) đúng bằng số kí tự đã nhập để xoá chữ!
-                this.terminalBridge.writeRaw('\b'.repeat(cmdToType.length));
                 return;
             }
 
@@ -429,9 +429,6 @@ class TelegramBotService {
                 // Cắt bớt dấu gạch chéo để tiết kiệm byte cho callback_data
                 keyboard.push([{ text: cmd, callback_data: `cl_cmd_${cmd.substring(1)}` }]);
             }
-
-            // Lưu lại độ dài vừa gõ để xíu bấm nút thì lấy Backspace xoá đúng số kĩ tự này
-            this._lastClaudeCmdLength = cmdToType.length;
 
             await this.sendMessage(`💻 Gợi ý nội bộ cho "${cmdToType}":`, {
                 reply_markup: { inline_keyboard: keyboard }
@@ -1727,12 +1724,7 @@ ${caption ? `    # Type caption
                     if (this.currentMode !== 'terminal') return;
                     const cmd = '/' + action.replace('cl_cmd_', '');
                     
-                    // Xóa dòng gõ dở dang trên Terminal bằng cách gõ phím Backspace (\b) tương ứng
-                    const bsCount = this._lastClaudeCmdLength || 30; // Mặc định xoá rộng 30 kí tự nếu quên 
-                    this.terminalBridge.writeRaw('\b'.repeat(bsCount));
-                    
                     // Gõ lệnh hoàn chỉnh và ấn Enter ngay lập tức
-                    await new Promise(r => setTimeout(r, 200)); 
                     this.terminalBridge.write(cmd);
                     
                     await this.bot.answerCallbackQuery(query.id, { text: `✅ Đã chạy: ${cmd}` });
