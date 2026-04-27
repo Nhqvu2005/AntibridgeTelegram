@@ -1,15 +1,5 @@
 @echo off
-echo ========================================
-echo   AntiBridge v3.0.0 - Start Server
-echo ========================================
-echo.
-
-cd /d "%~dp0backend"
-
-echo Installing dependencies...
-call npm install --silent
-
-echo.
-echo Starting server...
-echo.
-call npm start
+REM Deprecated compatibility entry point.
+REM Use START_BOT.bat as the single canonical startup file.
+cd /d "%~dp0"
+call "%~dp0START_BOT.bat"

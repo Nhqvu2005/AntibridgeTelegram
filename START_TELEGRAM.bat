@@ -1,23 +1,5 @@
 @echo off
-echo ========================================
-echo   AntiBridge - Telegram Mode
-echo ========================================
-echo.
-
-echo Waiting 5 seconds for Antigravity to start...
-timeout /t 5 /nobreak >nul
-
+REM Deprecated compatibility entry point.
+REM Use START_BOT.bat as the single canonical startup file.
 cd /d "%~dp0"
-
-:loop
-echo.
-echo [%date% %time%] Starting Telegram Server...
-echo.
-
-node backend/telegram-server.js >> bot_crash_log.txt 2>&1
-
-echo.
-echo [%date% %time%] Bot exited. Restarting in 3 seconds...
-echo   (Press Ctrl+C to stop)
-timeout /t 3 /nobreak >nul
-goto loop
+call "%~dp0START_BOT.bat"

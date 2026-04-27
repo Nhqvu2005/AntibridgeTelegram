@@ -509,6 +509,11 @@ class TelegramBotService {
 
         // If user typed a model name directly
         if (modelName) {
+            // Reserved mode aliases: /model antigravity or /model terminal should switch mode, not model.
+            const modeAlias = modelName.toLowerCase();
+            if (modeAlias === 'antigravity' || modeAlias === 'terminal') {
+                return this._handleMode(msg, [null, modelName]);
+            }
             return this._switchModel(modelName);
         }
 
@@ -683,17 +688,24 @@ class TelegramBotService {
     async _handleRestart(msg) {
         if (!this._isAuthorized(msg)) return;
 
+        const DATA_DIR = path.join(__dirname, '..', '..', 'Data');
+        const SAFE_MODE_FILE = path.join(DATA_DIR, '.safe_mode');
+        const CRASH_LOG_FILE = path.join(DATA_DIR, 'crash_error.log');
+
+        if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
+        fs.writeFileSync(SAFE_MODE_FILE, `restart_requested|${Date.now()}|bot_restart_via_telegram`);
+        fs.writeFileSync(CRASH_LOG_FILE, 'Bot restart requested via Telegram. If the next startup crashes, safe-startup.js will report this and rollback to GitHub origin/main.');
+
         await this.sendMessage(
             '🔄 **Restarting bot...**\n\n' +
             '⏳ Bot sẽ tự khởi động lại trong vài giây.\n' +
-            '✅ Code mới nhất trên disk sẽ được load.'
+            '✅ Code mới nhất trên disk sẽ được load.\n' +
+            '🛡️ Nếu code mới lỗi → báo Telegram + rollback về bản mới nhất trên GitHub.'
         );
 
-        // Give time for message to send
         await new Promise(r => setTimeout(r, 1000));
 
-        // Exit process — START_TELEGRAM.bat loop will restart it
-        console.log('🔄 Restart requested via Telegram. Exiting...');
+        console.log('🔄 Restart requested via Telegram. Exiting (Safe Mode marker set)...');
         process.exit(0);
     }
 

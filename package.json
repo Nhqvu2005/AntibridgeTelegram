@@ -5,9 +5,9 @@
     "main": "backend/server.js",
     "scripts": {
         "start": "node backend/server.js",
-        "telegram": "node backend/telegram-server.js",
+        "telegram": "node backend/safe-startup.js",
         "dev": "node --watch backend/server.js",
-        "dev:telegram": "node --watch backend/telegram-server.js",
+        "dev:telegram": "node backend/safe-startup.js",
         "setup": "call SETUP.bat",
         "test": "echo \"Error: no test specified\" && exit 1"
     },
