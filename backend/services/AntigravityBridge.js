@@ -791,6 +791,13 @@ class AntigravityBridge {
                 function elementToText(container) {
                     const clone = container.cloneNode(true);
                     clone.querySelectorAll('script, style, .thinking-content').forEach(n => n.remove());
+
+                    // Strip Antigravity code-block UI chrome before innerText extraction.
+                    // Without this, Material icon labels leak into Telegram as strings like:
+                    // "jsalternate_emailcontent_copy" or "bashterminalalternate_emailcontent_copy".
+                    clone.querySelectorAll('button, [role="button"], svg, .codicon, .material-icons, .material-symbols-outlined, .material-symbols-rounded').forEach(n => n.remove());
+                    clone.querySelectorAll('[aria-label*="copy" i], [title*="copy" i], [class*="copy" i], [data-tooltip-id*="copy" i]').forEach(n => n.remove());
+
                     const tables = clone.querySelectorAll('table');
                     tables.forEach(table => {
                         const textBlocks = htmlTableToBlocks(table);

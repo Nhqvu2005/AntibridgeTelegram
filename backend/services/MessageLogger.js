@@ -82,6 +82,8 @@ class MessageLogger {
     saveHistory(role, text, html = null) {
         if (!text) return;
 
+        // Không log debug khi lưu history (tiết kiệm I/O)
+        // History vẫn được ghi vào JSONL như bình thường
         const entry = {
             id: this.nextId++,
             timestamp: new Date().toISOString(),
@@ -94,8 +96,6 @@ class MessageLogger {
         const entries = this.readHistoryEntries();
         entries.push(entry);
         this.writeHistoryEntries(entries);
-
-        this.logMessage('history_save', entry, 'server');
     }
 
     getRecentHistory(limit = this.maxMessages) {
@@ -158,7 +158,19 @@ class MessageLogger {
 
     // === DEBUG LOGGING ===
 
+    /**
+     * Ghi log vào file `Data/Text/logs/messages_YYYY-MM-DD.log` (chỉ khi lỗi / debug verbosity)
+     * Mặc định: KHÔNG ghi log mỗi message (tiết kiệm disk + I/O).
+     * Bật verbose bằng cách set env `MESSAGE_LOG_VERBOSE=1`.
+     */
     logMessage(type, data, source = 'unknown') {
+        // Chỉ ghi log khi:
+        //   1. type bắt đầu bằng 'error' (lỗi runtime)
+        //   2. hoặc MESSAGE_LOG_VERBOSE=1 (debug)
+        const isError = typeof type === 'string' && type.toLowerCase().startsWith('error');
+        const verbose = process.env.MESSAGE_LOG_VERBOSE === '1' || process.env.MESSAGE_LOG_VERBOSE === 'true';
+        if (!isError && !verbose) return;
+
         const timestamp = new Date().toISOString();
         const logLine = `[${timestamp}] [${type}] [${source}]\n${JSON.stringify(data, null, 2)}\n${'='.repeat(60)}\n\n`;
 
@@ -168,12 +180,18 @@ class MessageLogger {
     }
 
     logStreaming(messages) {
-        this.logMessage('chat_update', { count: messages.length }, 'bridge');
+        // Chat update liên tục → chỉ log khi verbose
+        if (process.env.MESSAGE_LOG_VERBOSE === '1' || process.env.MESSAGE_LOG_VERBOSE === 'true') {
+            this.logMessage('chat_update', { count: messages.length }, 'bridge');
+        }
     }
 
     logComplete(message) {
+        // Lưu history (đã được tối ưu) + chỉ log khi verbose
         this.saveHistory(message.role, message.text, message.html);
-        this.logMessage('chat_complete', message, 'bridge');
+        if (process.env.MESSAGE_LOG_VERBOSE === '1' || process.env.MESSAGE_LOG_VERBOSE === 'true') {
+            this.logMessage('chat_complete', message, 'bridge');
+        }
     }
 }
 

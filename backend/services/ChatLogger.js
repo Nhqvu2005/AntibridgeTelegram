@@ -37,6 +37,11 @@ class ChatLogger {
      * @param {object} metadata - Metadata bổ sung (optional)
      */
     logMessage(role, text, metadata = {}) {
+        // Mặc định: KHÔNG ghi log mỗi message.
+        // Chỉ ghi khi role === 'error' / 'warn' HOẶC env CHAT_LOG_VERBOSE=1
+        const verbose = process.env.CHAT_LOG_VERBOSE === '1' || process.env.CHAT_LOG_VERBOSE === 'true';
+        if (role !== 'error' && role !== 'warn' && !verbose) return;
+
         const timestamp = new Date().toISOString();
         const filename = this.getLogFilename();
 
@@ -47,7 +52,6 @@ class ChatLogger {
 
         try {
             fs.appendFileSync(filename, line, 'utf8');
-            console.log(`📝 Logged ${role} message (${text.length} chars)`);
         } catch (err) {
             console.error('❌ Log error:', err.message);
         }
@@ -57,6 +61,10 @@ class ChatLogger {
      * Ghi log đầy đủ với JSON (cho debugging)
      */
     logMessageFull(role, text, metadata = {}) {
+        // Mặc định: KHÔNG ghi. Chỉ bật khi verbose
+        const verbose = process.env.CHAT_LOG_VERBOSE === '1' || process.env.CHAT_LOG_VERBOSE === 'true';
+        if (!verbose) return;
+
         const timestamp = new Date().toISOString();
         const filename = this.getLogFilename().replace('.log', '_full.jsonl');
 

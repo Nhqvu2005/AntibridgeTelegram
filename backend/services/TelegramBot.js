@@ -48,8 +48,14 @@ class TelegramBotService {
             .map(m => m.trim())
             .filter(m => m.length > 0);
 
-        // Initialize bot
-        this.bot = new TelegramBot(this.botToken, { polling: true });
+        // Initialize bot with explicit allowed_updates so callback_query is always received
+        this.bot = new TelegramBot(this.botToken, {
+            polling: {
+                params: {
+                    allowed_updates: ['message', 'callback_query', 'edited_message']
+                }
+            }
+        });
         this.quotaService = new QuotaService();
 
         this._setupCommands();
@@ -134,6 +140,11 @@ class TelegramBotService {
                     return;
                 }
 
+                // Clean toolbar artifacts and restore readable line breaks
+                // before sending to Telegram (BG Monitor bypasses _sendOrEditResponse).
+                displayMsg = this._cleanCodeToolbarArtifacts(displayMsg);
+                displayMsg = this._restoreReadableLineBreaks(displayMsg);
+
                 // Truncate for Telegram 4096 limit
                 if (displayMsg.length > 4000) {
                     displayMsg = displayMsg.substring(displayMsg.length - 4000);
@@ -207,6 +218,8 @@ class TelegramBotService {
             { command: 'tpad', description: '🕹️ Mở Control Pad (Điều hướng bằng phím)' },
             { command: 'kill', description: '☠️ Khởi động lại (Kill) Terminal bị nghẽn' },
             { command: 'claude_cmd', description: '💡 Lấy danh sách lệnh gợi ý từ Claude CLI' },
+            { command: 'term', description: '🖥️ Quản lý Terminal Sessions (multi-session)' },
+            { command: 'compact', description: '🗜️ Gửi /compact tới Terminal (nén context Claude CLI)' },
         ]);
 
         this.bot.onText(/\/start/, (msg) => this._handleStart(msg));
@@ -238,6 +251,8 @@ class TelegramBotService {
         this.bot.onText(/\/kill/, (msg) => this._handleKill(msg));
         this.bot.onText(/\/tpad/, (msg) => this._handleTpad(msg));
         this.bot.onText(/\/claude_cmd(?:\s+(.*))?/, (msg, match) => this._handleClaudeCmd(msg, match));
+        this.bot.onText(/\/term\s*(.*)/, (msg, match) => this._handleTerm(msg, match));
+        this.bot.onText(/\/compact/, (msg) => this._handleCompact(msg));
     }
 
     _isAuthorized(msg) {
@@ -257,7 +272,8 @@ class TelegramBotService {
             `🎨 /model <name> - Đổi model\n` +
             `📸 /screenshot - Chụp màn hình\n` +
             `📊 /status - Kiểm tra kết nối\n\n` +
-            `🔀 *Modes:*\n/mode antigravity - Điều khiển IDE\n/mode terminal - Mở PowerShell/Claude`,
+            `🔀 *Modes:*\n/mode antigravity - Điều khiển IDE\n/mode terminal - Mở PowerShell/Claude\n` +
+            `🗜️ /compact - Gửi /compact tới Terminal (nén context)`,
             { parse_mode: 'Markdown' }
         );
     }
@@ -287,12 +303,23 @@ class TelegramBotService {
 
         const modeStr = this.currentMode === 'terminal' ? '💻 Terminal' : '🌌 Antigravity IDE';
 
+        let terminalInfo = '';
+        if (this.currentMode === 'terminal') {
+            const activeName = this.terminalBridge.getActiveSessionName();
+            const activeSession = this.terminalBridge.getActiveSession();
+            const totalSessions = this.terminalBridge.listSessions().length;
+            terminalInfo = `\n🖥️ Terminal Sessions: ${totalSessions} active, current: **${activeName || 'none'}**`;
+            if (activeSession && activeSession.cwd) {
+                terminalInfo += `\n📁 CWD: \`${activeSession.cwd}\``;
+            }
+        }
+
         await this.sendMessage(
             `📊 *Trạng thái hệ thống*\n\n` +
             `🔀 Mode: ${modeStr}\n` +
             `🔌 CDP: ${cdpConnected ? '✅ Connected' : '❌ Disconnected'}\n` +
             `🤖 Bot: ✅ Online${stateInfo}\n` +
-            `🎯 Detector: ${detectorStats.running ? '✅ Running' : '⏹️ Stopped'}`,
+            `🎯 Detector: ${detectorStats.running ? '✅ Running' : '⏹️ Stopped'}${terminalInfo}`,
             { parse_mode: 'Markdown' }
         );
     }
@@ -347,9 +374,159 @@ class TelegramBotService {
             await this.sendMessage('Chỉ dùng được trong /mode terminal.');
             return;
         }
-        this.terminalBridge.stop();
-        this.terminalBridge.start();
-        await this.sendMessage('💀 Đã ép buộc đóng và khởi động lại phiên Terminal hoàn toàn mới tại thư mục hiện tại.');
+        const session = this.terminalBridge.restartActiveSession();
+        if (session) {
+            await this.sendMessage(`💀 Đã kill và restart session **${session.name}** tại \`${session.cwd}\`.`, { parse_mode: 'Markdown' });
+        } else {
+            await this.sendMessage('⚠️ Không có session nào đang active. Dùng `/mode terminal` để tạo session mới.', { parse_mode: 'Markdown' });
+        }
+    }
+
+    // ==========================================
+    // 🗜️ /compact - Gửi /compact tới Terminal (nén context)
+    // ==========================================
+    async _handleCompact(msg) {
+        if (!this._isAuthorized(msg)) return;
+
+        // Tự động chuyển sang terminal mode nếu đang ở antigravity
+        if (this.currentMode !== 'terminal') {
+            // Khởi động terminal session nếu chưa có
+            let ptyPath = this.terminalProjectRoot;
+            if (!ptyPath && this.antigravityBridge?.isConnected) {
+                try { ptyPath = await this.antigravityBridge.getCurrentProjectRoot(); } catch (e) { }
+            }
+            if (!ptyPath) ptyPath = process.cwd();
+            this.terminalProjectRoot = ptyPath;
+
+            this.currentMode = 'terminal';
+            this.terminalBridge.start(ptyPath);
+            console.log(`🔀 Auto-switched to terminal mode for /compact (cwd: ${ptyPath})`);
+        }
+
+        // Gõ lệnh /compact + Enter vào terminal đang active
+        try {
+            this.terminalBridge.write('/compact\r');
+            const activeName = this.terminalBridge.getActiveSessionName() || 'active';
+            await this.sendMessage(`🗜️ Đã gửi \`/compact\` tới terminal session **${activeName}**.`);
+        } catch (e) {
+            await this.sendMessage(`❌ Compact error: ${e.message}`);
+        }
+    }
+
+    // ==========================================
+    // TERMINAL SESSION MANAGEMENT
+    // ==========================================
+
+    async _handleTerm(msg, match) {
+        if (!this._isAuthorized(msg)) return;
+
+        const text = (match[1] || '').trim();
+        const parts = text.split(/\s+/).filter(Boolean);
+        const subCmd = parts[0] || '';
+
+        // /term new [name]
+        if (subCmd === 'new') {
+            const name = parts[1] || null; // null = auto-generate
+            let ptyPath = this.terminalProjectRoot;
+            if (!ptyPath && this.antigravityBridge?.isConnected) {
+                try { ptyPath = await this.antigravityBridge.getCurrentProjectRoot(); } catch (e) {}
+            }
+            if (!ptyPath) ptyPath = process.cwd();
+
+            try {
+                const session = this.terminalBridge.createSession(name, ptyPath);
+                if (this.currentMode !== 'terminal') {
+                    this.currentMode = 'terminal';
+                }
+                await this.sendMessage(`✅ Đã tạo session mới **${session.name}** tại \`${session.cwd}\`.`, { parse_mode: 'Markdown' });
+            } catch (e) {
+                await this.sendMessage(`❌ Lỗi tạo session: ${e.message}`);
+            }
+            return;
+        }
+
+        // Default: show session panel
+        const sessions = this.terminalBridge.listSessions();
+        const activeName = this.terminalBridge.getActiveSessionName();
+
+        if (sessions.length === 0) {
+            const keyboard = [[{ text: '➕ Tạo session đầu tiên', callback_data: 'term_new' }]];
+            await this.sendMessage(
+                `🖥️ **Terminal Sessions**\n\n` +
+                `Chưa có session nào. Bấm nút bên dưới để tạo.`,
+                { parse_mode: 'Markdown', reply_markup: { inline_keyboard: keyboard } }
+            );
+            return;
+        }
+
+        // Build panel text
+        let panel = `🖥️ **Terminal Sessions** (${sessions.length} session${sessions.length > 1 ? 's' : ''})\n\n`;
+        for (const s of sessions) {
+            const icon = s.name === activeName ? '🟢' : '⚪';
+            const status = s.isRunning ? 'Running' : 'Stopped';
+            const cwdShort = s.cwd.length > 30 ? '...' + s.cwd.slice(-27) : s.cwd;
+            panel += `${icon} *${s.name}* — \`${cwdShort}\`\n   Status: ${status}\n\n`;
+        }
+
+        // Build inline keyboard
+        const keyboard = [];
+
+        // Row 1: Switch buttons (max 3 per row)
+        const switchRow = [];
+        for (const s of sessions) {
+            if (s.name !== activeName) {
+                switchRow.push({ text: `🔄 ${s.name}`, callback_data: `term_switch_${s.name}` });
+            }
+        }
+        if (switchRow.length > 0) keyboard.push(switchRow);
+
+        // Row 2: Kill buttons
+        const killRow = [];
+        for (const s of sessions) {
+            killRow.push({ text: `🗑️ ${s.name}`, callback_data: `term_kill_${s.name}` });
+        }
+        if (killRow.length > 0) keyboard.push(killRow);
+
+        // Row 3: Global actions
+        const globalRow = [];
+        globalRow.push({ text: '➕ New', callback_data: 'term_new' });
+        if (sessions.length > 1) {
+            globalRow.push({ text: '💀 Kill All', callback_data: 'term_killall' });
+        }
+        keyboard.push(globalRow);
+
+        await this.sendMessage(panel, { parse_mode: 'Markdown', reply_markup: { inline_keyboard: keyboard } });
+    }
+
+    async _handleTermSwitch(name) {
+        const session = this.terminalBridge.switchSession(name);
+        if (session) {
+            await this.sendMessage(`🔄 Đã chuyển sang session **${session.name}** tại \`${session.cwd}\`.`, { parse_mode: 'Markdown' });
+        } else {
+            await this.sendMessage(`❌ Session "${name}" không tồn tại.`);
+        }
+    }
+
+    async _handleTermKill(name) {
+        const success = this.terminalBridge.killSession(name);
+        if (success) {
+            const remaining = this.terminalBridge.listSessions().length;
+            if (remaining > 0) {
+                const activeName = this.terminalBridge.getActiveSessionName();
+                await this.sendMessage(`🗑️ Đã kill session **${name}**. Còn ${remaining} session(s). Active: **${activeName}**.`, { parse_mode: 'Markdown' });
+            } else {
+                this.currentMode = 'antigravity';
+                await this.sendMessage(`🗑️ Đã kill session **${name}**. Không còn session nào. Quay lại Antigravity mode.`, { parse_mode: 'Markdown' });
+            }
+        } else {
+            await this.sendMessage(`❌ Session "${name}" không tồn tại.`);
+        }
+    }
+
+    async _handleTermKillAll() {
+        const count = this.terminalBridge.killAllSessions();
+        this.currentMode = 'antigravity';
+        await this.sendMessage(`🗑️ Đã kill toàn bộ ${count} session(s). Quay lại Antigravity mode.`, { parse_mode: 'Markdown' });
     }
 
     async _handleTpad(msg) {
@@ -1024,11 +1201,10 @@ class TelegramBotService {
                 keyboard.push(navRow);
             }
 
-            const text = `📂 **Duyệt File System**\n📍 Path: \`${browsePath}\`\n📄 Trang ${page + 1}/${totalPages || 1}`;
+            const text = `📂 Duyệt File System\n📍 Path: ${browsePath}\n📄 Trang ${page + 1}/${totalPages || 1}`;
 
             const options = {
                 chat_id: this.chatId,
-                parse_mode: 'Markdown',
                 reply_markup: { inline_keyboard: keyboard }
             };
 
@@ -1051,13 +1227,13 @@ class TelegramBotService {
 
                         // If other error (e.g. markdown), try sending new message
                         console.error('⚠️ Edit failed, sending new message:', editErr.message);
-                        await this.sendMessage(text, { reply_markup: { inline_keyboard: keyboard }, parse_mode: 'Markdown' });
+                        await this.sendMessage(text, { reply_markup: { inline_keyboard: keyboard } });
                     }
                 } else {
-                    await this.sendMessage(text, { reply_markup: { inline_keyboard: keyboard }, parse_mode: 'Markdown' });
+                    await this.sendMessage(text, { reply_markup: { inline_keyboard: keyboard } });
                 }
             } else {
-                await this.sendMessage(text, { reply_markup: { inline_keyboard: keyboard }, parse_mode: 'Markdown' });
+                await this.sendMessage(text, { reply_markup: { inline_keyboard: keyboard } });
             }
 
         } catch (e) {
@@ -1331,20 +1507,24 @@ class TelegramBotService {
 
                     // Try sending image via CDP
                     let sent = false;
-                    // this._logToFile('INFO', 'ImageHandler', `Processing image: ${localPath} (${(fileSize / 1024).toFixed(1)}KB), caption: "${(text || '').substring(0, 50)}"`);
+                    let failReason = '';
                     if (this.antigravityBridge.isConnected) {
                         try {
                             const result = await this.antigravityBridge.injectImageToChat(localPath, text);
-                            // this._logToFile('INFO', 'ImageHandler', `CDP inject result: ${JSON.stringify(result)}`);
                             if (result && result.injected) {
                                 sent = true;
-                                // this._logToFile('INFO', 'ImageHandler', 'Image sent via CDP');
+                                console.log('✅ Image sent via CDP');
                             } else {
-                                // this._logToFile('WARN', 'ImageHandler', `CDP inject returned falsy: ${JSON.stringify(result)}`);
+                                failReason = 'CDP: chat context không tìm thấy';
+                                console.log(`⚠️ CDP image inject failed: no chat context`);
                             }
                         } catch (e) {
-                            // this._logToFile('ERROR', 'ImageHandler', `CDP image inject exception`, e);
+                            failReason = `CDP error: ${e.message}`;
+                            console.error(`❌ CDP image inject exception: ${e.message}`);
                         }
+                    } else {
+                        failReason = 'CDP chưa kết nối';
+                        console.log('⚠️ CDP not connected, skipping image inject');
                     }
 
                     // Fallback: PowerShell clipboard paste
@@ -1355,7 +1535,9 @@ class TelegramBotService {
                             sent = true;
                             console.log('✅ Image sent via PowerShell clipboard');
                         } catch (e) {
-                            // this._logToFile('ERROR', 'ImageHandler', `Clipboard fallback failed`, e);
+                            const clipErr = e.message || 'unknown';
+                            failReason += ` | Clipboard: ${clipErr}`;
+                            console.error(`❌ Clipboard fallback failed: ${clipErr}`);
                         }
                     }
 
@@ -1366,7 +1548,7 @@ class TelegramBotService {
                         await this.sendMessage('✅ Đã gửi ảnh! Đang đợi AI trả lời...');
                         this._pollForResponse(baselineText);
                     } else {
-                        await this.sendMessage('❌ Không thể gửi ảnh. Kiểm tra Antigravity đang chạy?');
+                        await this.sendMessage(`❌ Không thể gửi ảnh.\n${failReason}\n\nHãy đảm bảo Antigravity đang mở và chat panel visible.`);
                     }
                 } catch (e) {
                     console.error('❌ Photo handling error:', e.message);
@@ -1619,8 +1801,19 @@ if ($proc) {
      */
     _sendImageViaClipboard(imagePath, caption = '') {
         return new Promise((resolve, reject) => {
-            // PowerShell: copy image to clipboard → focus Antigravity → paste
-            const captionEscaped = caption.replace(/'/g, "''").replace(/`/g, '``');
+            const tempDir = path.join(__dirname, '..');
+            const psPath = path.join(tempDir, 'temp_tg_img_paste.ps1');
+            const captionPath = path.join(tempDir, 'temp_tg_img_caption.txt');
+            const escapedImgPath = imagePath.replace(/\\/g, '\\\\');
+            const hasCaption = !!(caption && caption.trim());
+
+            // Keep arbitrary Telegram caption text out of PowerShell source code.
+            // This avoids parser errors with Vietnamese text, quotes, emoji, etc.
+            if (hasCaption) {
+                fs.writeFileSync(captionPath, caption.trim(), 'utf8');
+            }
+
+            const escapedCaptionPath = captionPath.replace(/\\/g, '\\\\');
             const psScript = `
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
@@ -1636,12 +1829,15 @@ public class Win32Image {
 "@
 
 # Copy image to clipboard
-$img = [System.Drawing.Image]::FromFile('${imagePath.replace(/\\/g, '\\\\')}')
+$img = [System.Drawing.Image]::FromFile('${escapedImgPath}')
 [System.Windows.Forms.Clipboard]::SetImage($img)
 $img.Dispose()
 
 # Find and focus Antigravity window
-$proc = Get-Process | Where-Object { $_.MainWindowTitle -like '*Antigravity*' -and $_.MainWindowTitle -notlike '*Manager*' } | Select-Object -First 1
+$proc = Get-Process | Where-Object {
+    $_.MainWindowTitle -like '*Antigravity*' -and
+    $_.MainWindowTitle -notlike '*Manager*'
+} | Select-Object -First 1
 
 if ($proc) {
     [Win32Image]::ShowWindow($proc.MainWindowHandle, 9)
@@ -1649,8 +1845,9 @@ if ($proc) {
     Start-Sleep -Milliseconds 500
     [System.Windows.Forms.SendKeys]::SendWait("^v")
     Start-Sleep -Milliseconds 800
-${caption ? `    # Type caption
-    [System.Windows.Forms.Clipboard]::SetText('${captionEscaped}')
+${hasCaption ? `    # Paste caption from UTF-8 file
+    $captionText = [System.IO.File]::ReadAllText('${escapedCaptionPath}', [System.Text.Encoding]::UTF8)
+    [System.Windows.Forms.Clipboard]::SetText($captionText)
     Start-Sleep -Milliseconds 200
     [System.Windows.Forms.SendKeys]::SendWait("^v")
     Start-Sleep -Milliseconds 300` : ''}
@@ -1661,11 +1858,11 @@ ${caption ? `    # Type caption
 }
 `;
 
-            const psPath = path.join(__dirname, '..', 'temp_tg_img_paste.ps1');
             fs.writeFileSync(psPath, psScript, 'utf8');
 
             exec(`powershell -ExecutionPolicy Bypass -File "${psPath}"`, { timeout: 20000 }, (err, stdout) => {
                 try { fs.unlinkSync(psPath); } catch (e) { }
+                try { fs.unlinkSync(captionPath); } catch (e) { }
 
                 if (err) {
                     reject(new Error(`PowerShell error: ${err.message}`));
@@ -1689,9 +1886,19 @@ ${caption ? `    # Type caption
     // ==========================================
 
     _setupCallbackHandler() {
+        // Log polling errors that may prevent callbacks from arriving
+        this.bot.on('polling_error', (err) => {
+            console.error(`❌ Polling error: ${err.code || err.message}`);
+        });
+
         this.bot.on('callback_query', async (query) => {
+            console.log(`🔔 RAW callback_query received: data="${query.data}", from=${query.from?.id}, chat=${query.message?.chat?.id}`);
+
             const chatId = String(query.message.chat.id);
-            if (chatId !== this.chatId) return;
+            if (chatId !== this.chatId) {
+                console.log(`⚠️ Callback skipped: chatId ${chatId} !== ${this.chatId}`);
+                return;
+            }
 
             const action = query.data;
             console.log(`🎯 Callback: ${action}`);
@@ -1774,6 +1981,39 @@ ${caption ? `    # Type caption
                         await this.bot.answerCallbackQuery(query.id, { text: '❌ Model không hợp lệ' });
                     }
                 }
+                // --- Terminal Session Callbacks ---
+                else if (action === 'term_new') {
+                    await this.bot.answerCallbackQuery(query.id, { text: '➕ Tạo session mới...' });
+                    let ptyPath = this.terminalProjectRoot || process.cwd();
+                    try {
+                        const session = this.terminalBridge.createSession(null, ptyPath);
+                        if (this.currentMode !== 'terminal') this.currentMode = 'terminal';
+                        await this.bot.sendMessage(this.chatId, `✅ Đã tạo session **${session.name}** tại \`${session.cwd}\`.`, { parse_mode: 'Markdown' });
+                    } catch (e) {
+                        await this.bot.sendMessage(this.chatId, `❌ Lỗi tạo session: ${e.message}`);
+                    }
+                } else if (action === 'term_killall') {
+                    await this.bot.answerCallbackQuery(query.id, { text: '💀 Killing all sessions...' });
+                    const count = this.terminalBridge.killAllSessions();
+                    this.currentMode = 'antigravity';
+                    await this.bot.sendMessage(this.chatId, `🗑️ Đã kill toàn bộ ${count} session(s). Quay lại Antigravity mode.`, { parse_mode: 'Markdown' });
+                } else if (action.startsWith('term_switch_')) {
+                    const name = action.replace('term_switch_', '');
+                    await this.bot.answerCallbackQuery(query.id, { text: `🔄 Switching to ${name}...` });
+                    const session = this.terminalBridge.switchSession(name);
+                    if (session) {
+                        await this.bot.sendMessage(this.chatId, `🔄 Đã chuyển sang session **${session.name}** tại \`${session.cwd}\`.`, { parse_mode: 'Markdown' });
+                    }
+                } else if (action.startsWith('term_kill_')) {
+                    const name = action.replace('term_kill_', '');
+                    await this.bot.answerCallbackQuery(query.id, { text: `🗑️ Killing ${name}...` });
+                    const success = this.terminalBridge.killSession(name);
+                    if (success) {
+                        const remaining = this.terminalBridge.listSessions().length;
+                        if (remaining === 0) this.currentMode = 'antigravity';
+                        await this.bot.sendMessage(this.chatId, `🗑️ Đã kill session **${name}**.`, { parse_mode: 'Markdown' });
+                    }
+                }
                 // --- Conversation Callbacks ---
                 else if (action.startsWith('conv_')) {
                     const target = action.replace('conv_', ''); // could be index or title? better index
@@ -1802,13 +2042,16 @@ ${caption ? `    # Type caption
                         await this.bot.sendMessage(this.chatId, `📁 **Tạo Folder mới**\n\nTrong thư mục hiện tại:\n\`${this.currentBrowsePath}\`\n\n👉 Vui lòng gõ tên thư mục muốn tạo (hoặc gửi /cancel để hủy):`, { parse_mode: 'Markdown' });
                     }
                     else if (action.startsWith('dirpage_')) {
+                        await this.bot.answerCallbackQuery(query.id);
                         const page = parseInt(action.replace('dirpage_', ''));
                         // Use currentBrowsePath implicitly by passing null
                         await this._handleOpen(query.message, null, null, true, page);
                     } else if (action === 'parent_dir') {
+                        await this.bot.answerCallbackQuery(query.id);
                         const parent = path.dirname(this.currentBrowsePath || 'C:\\');
                         await this._handleOpen(query.message, null, parent, true);
                     } else if (action.startsWith('dir_')) {
+                        await this.bot.answerCallbackQuery(query.id);
                         const dirName = action.replace('dir_', '');
                         const newPath = path.join(this.currentBrowsePath || 'C:\\', dirName);
                         await this._handleOpen(query.message, null, newPath, true);
@@ -1870,8 +2113,6 @@ ${caption ? `    # Type caption
                             await this.bot.sendMessage(this.chatId, `❌ Lỗi ngoại lệ: ${openErr.message}`);
                         }
                     }
-
-                    await this.bot.answerCallbackQuery(query.id);
                 }
                 // --- Workflow Callbacks ---
                 else if (action.startsWith('workflow_')) {
@@ -1950,8 +2191,11 @@ ${caption ? `    # Type caption
 
         // Chain onto the lock — only one call executes at a time
         this._sendLock = (this._sendLock || Promise.resolve()).then(async () => {
+            // Restore line breaks that may have been lost during DOM extraction
+            let cleanText = this._restoreReadableLineBreaks(text);
+
             // Truncate for Telegram 4096 limit
-            const displayText = text.length > 4000 ? text.substring(text.length - 4000) : text;
+            const displayText = cleanText.length > 4000 ? cleanText.substring(cleanText.length - 4000) : cleanText;
 
             // Skip if identical to last edit
             if (displayText === this._lastEditedText) return;
@@ -2107,6 +2351,74 @@ ${caption ? `    # Type caption
         });
     }
 
+    /**
+     * Remove Antigravity code-block toolbar and Material icon text that can leak
+     * into DOM innerText, especially for code blocks labelled js/bash/terminal.
+     */
+    _cleanCodeToolbarArtifacts(text) {
+        if (!text) return text;
+
+        const langPrefix = '(?:text|plaintext|plain|javascript|typescript|python|java|go|rust|bash|shell|terminal|powershell|ps1|zsh|sh|css|html|json|yaml|yml|sql|c|cpp|csharp|ruby|php|swift|kotlin|jsx|tsx|js|ts)';
+        const iconCluster = '(?:alternate_email|content_copy|terminal|copy|check|done|open_in_new|more_horiz|more_vert|code|language)+';
+
+        // Entire artifact on its own line: "bashterminalalternate_emailcontent_copy".
+        text = text.replace(new RegExp(`^\\s*${langPrefix}?${iconCluster}\\s*$`, 'gim'), '');
+
+        // Artifact glued to actual code at line start.
+        text = text.replace(new RegExp(`(^|\\n)\\s*${langPrefix}?${iconCluster}`, 'gim'), '$1');
+
+        // With word boundary
+        text = text.replace(/\b(?:text|plaintext|plain|js|ts|jsx|tsx|bash|shell|terminal|powershell|python|json|html|css)?(?:terminal)?(?:alternate_email|content_copy)(?:(?:alternate_email|content_copy|terminal|copy)+)?/gi, '');
+
+        // Without word boundary (glued after normal text)
+        text = text.replace(/(?:text|plaintext|plain|js|ts|jsx|tsx|bash|shell|terminal|powershell|python|json|html|css)(?:terminal)?(?:alternate_email|content_copy)(?:(?:alternate_email|content_copy|terminal|copy)+)?/gi, '');
+
+        return text;
+    }
+
+    /**
+     * Restore line breaks when DOM extraction flattens code blocks
+     * into a single Telegram line.
+     */
+    _restoreReadableLineBreaks(text) {
+        if (!text) return text;
+
+        // Code block separators must stand on their own lines.
+        text = text.replace(/\s*(━━━\s*[\w.+-]+\s*━━━)\s*/g, '\n\n$1\n');
+        text = text.replace(/\s*(━━━━━━━━━━━━)\s*/g, '\n$1\n\n');
+
+        // Prose/list boundaries.
+        text = text.replace(/([:.])\s*(\d+\.\s+)/g, '$1\n\n$2');
+        text = text.replace(/\s+(Case\s+\d+\s+—\s+)/g, '\n\n$1');
+
+        // Generic: split known CLI commands glued to previous text
+        const cliCmds = ['npm', 'npx', 'node', 'git', 'curl', 'docker', 'pm2', 'ssh', 'cd', 'ls', 'cat', 'mkdir', 'rm', 'cp', 'mv', 'chmod', 'chown', 'taskkill', 'tasklist', 'netstat', 'pip', 'python', 'python3'];
+        for (const cmd of cliCmds) {
+            // Avoid splitting inside ALL_CAPS env keys like CDP_PORT=9001.
+            text = text.replace(new RegExp(`([^\\sA-Z_])(${cmd}\\s+)`, 'g'), '$1\n$2');
+        }
+
+        // PowerShell cmdlets
+        text = text.replace(/(Get-Content\s+[^\n]+?\s+-Tail\s+\d+)(Get-Process\b)/g, '$1\n$2');
+
+        // Env/config key=value pairs
+        text = text.replace(/(WS_PORT=\d+)(CDP_PORT=)/g, '$1\n$2');
+        text = text.replace(/([A-Z_]+=[^\sA-Z]+)([A-Z_]+=)/g, '$1\n$2');
+
+        // JSON formatting
+        text = text.replace(/(\{)\s*("[^"]+"\s*:)/g, '$1\n  $2');
+        text = text.replace(/(,)(\s*"[^"]+"\s*:)/g, '$1\n  $2');
+        text = text.replace(/(\})\s*(\})/g, '$1\n$2');
+        text = text.replace(/(\})(━━━)/g, '$1\n\n$2');
+        text = text.replace(/(;)(━━━━━━━━━━━━)/g, '$1\n$2');
+
+        // Normalize whitespace
+        text = text.replace(/[ \t]+\n/g, '\n');
+        text = text.replace(/\n{4,}/g, '\n\n\n');
+
+        return text.trim();
+    }
+
     // ==========================================
     // HELPERS
     // ==========================================
@@ -2123,15 +2435,30 @@ ${caption ? `    # Type caption
         text = text.replace(/\.code-block[\s\S]*?\}/g, '');
         text = text.replace(/\*::selection\s*\{[\s\S]*?\}/g, '');
 
+        // Strip Antigravity code-block toolbar/icon artifacts leaked from DOM innerText.
+        // Examples seen in Telegram: "jsalternate_emailcontent_copyconst x = 1"
+        // and "bashterminalalternate_emailcontent_copynpm run dev".
+        text = this._cleanCodeToolbarArtifacts(text);
+
         // Clean up code block language labels that innerText picks up
-        const langLabels = ['javascript', 'typescript', 'python', 'java', 'go', 'rust', 'bash', 'shell', 'css', 'html', 'json', 'yaml', 'sql', 'c', 'cpp', 'csharp', 'ruby', 'php', 'swift', 'kotlin', 'jsx', 'tsx'];
+        const langLabels = ['javascript', 'typescript', 'python', 'java', 'go', 'rust', 'bash', 'shell', 'terminal', 'powershell', 'ps1', 'zsh', 'sh', 'css', 'html', 'json', 'yaml', 'yml', 'sql', 'c', 'cpp', 'csharp', 'ruby', 'php', 'swift', 'kotlin', 'jsx', 'tsx', 'js', 'ts'];
         for (const lang of langLabels) {
             text = text.replace(new RegExp(`^${lang}\\s*$`, 'gim'), '');
             text = text.replace(new RegExp(`^${lang}(\\s*(?://|/\\*|#|<!--|\\n))`, 'gim'), '$1');
         }
 
-        // Strip raw markdown artifacts (since no parse_mode is used)
-        text = text.replace(/```\w*\n?/g, '');  // triple backticks
+        // Convert markdown fenced code blocks to readable Telegram plain text blocks
+        // before stripping markdown markers. This preserves newlines and prevents
+        // Antigravity code-block toolbar labels from making everything unreadable.
+        text = text.replace(/```([\w.+-]*)\s*\n([\s\S]*?)```/g, (match, lang, code) => {
+            const label = (lang || 'code').trim();
+            const cleanedCode = this._cleanCodeToolbarArtifacts(code)
+                .replace(/^\s+|\s+$/g, '');
+            return `\n━━━ ${label || 'code'} ━━━\n${cleanedCode}\n━━━━━━━━━━━━\n`;
+        });
+
+        // Strip remaining raw markdown artifacts (since no parse_mode is used)
+        text = text.replace(/```\w*\n?/g, '');  // leftover triple backticks
         text = text.replace(/\*\*([^*]+)\*\*/g, '$1');  // **bold**
         text = text.replace(/__([^_]+)__/g, '$1');  // __bold__
         text = text.replace(/(?<!\w)_([^_]+)_(?!\w)/g, '$1');  // _italic_
@@ -2158,6 +2485,11 @@ ${caption ? `    # Type caption
             // ===== FIRST: Strip style and script content entirely =====
             text = text.replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '');
             text = text.replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '');
+
+            // Strip Antigravity code-block toolbar/button chrome before text conversion.
+            text = text.replace(/<button\b[^>]*>[\s\S]*?<\/button>/gi, '');
+            text = text.replace(/<[^>]+(?:aria-label|title)=["'][^"']*copy[^"']*["'][^>]*>[\s\S]*?<\/[^>]+>/gi, '');
+            text = text.replace(/<svg\b[^>]*>[\s\S]*?<\/svg>/gi, '');
 
             // ===== Convert HTML tables to block format =====
             // Each row becomes a block with labeled lines
@@ -2262,6 +2594,8 @@ ${caption ? `    # Type caption
             text = text.replace(/<[^>]+>/g, '');
             // Decode HTML entities
             text = text.replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, "'");
+            // Strip code toolbar/icon artifacts after all tag removal/entity decoding.
+            text = this._cleanCodeToolbarArtifacts(text);
             // Clean up excessive newlines
             text = text.replace(/\n{3,}/g, '\n\n').trim();
 
