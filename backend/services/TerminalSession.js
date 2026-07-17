@@ -17,7 +17,7 @@ class TerminalSession {
         this.isActive = false;
         this.needsFlush = false;
         this.isFlushing = false;
-        this.flushInterval = 2000;
+        this.flushInterval = 500;
         this.cols = 80;
         this.rows = 150;
         this.createdAt = Date.now();

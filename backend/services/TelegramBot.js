@@ -179,9 +179,9 @@ class TelegramBotService {
                     console.log(`⚠️ BG Monitor error: ${e.message?.substring(0, 60)}`);
                 }
             }
-        }, 1500);
+        }, 700);
 
-        console.log('🔔 Background AI response monitor started (1.5s)');
+        console.log('🔔 Background AI response monitor started (700ms)');
     }
 
     // ==========================================
@@ -2200,9 +2200,9 @@ ${hasCaption ? `    # Paste caption from UTF-8 file
             // Skip if identical to last edit
             if (displayText === this._lastEditedText) return;
 
-            // Throttle edits: max 1 per 2s (only for edits, not first send)
+            // Throttle edits: max 1 per 800ms (only for edits, not first send)
             const now = Date.now();
-            if (this._activeResponseMsgId && this._lastEditTime && now - this._lastEditTime < 2000) return;
+            if (this._activeResponseMsgId && this._lastEditTime && now - this._lastEditTime < 800) return;
 
             try {
                 if (!this._activeResponseMsgId) {
