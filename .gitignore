@@ -25,6 +25,7 @@ Desktop.ini
 # Logs
 *.log
 npm-debug.log*
+logs/
 .agent/
 AntiHook/
 bot_crash_log.txt

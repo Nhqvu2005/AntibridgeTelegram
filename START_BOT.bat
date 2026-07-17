@@ -1,39 +1,40 @@
 @echo off
-setlocal
-
-title AntiBridge Telegram Bot - Safe Startup
-
-echo ========================================
-echo   AntiBridge Telegram Bot - Safe Mode
-echo ========================================
-echo.
-
+title AntiBridge Telegram Bot - PM2
 cd /d "%~dp0"
 
-echo Checking dependencies...
-if not exist "node_modules\dotenv" (
-    echo Missing node_modules or dotenv. Running npm install...
-    call npm install
-    if errorlevel 1 (
-        echo.
-        echo ERROR: npm install failed. Please check network/npm setup.
-        pause
-        exit /b 1
-    )
-) else (
-    echo Dependencies OK.
+echo ========================================
+echo   Starting AntiBridge Telegram Bot
+echo   (PM2 Process Manager)
+echo ========================================
+echo.
+
+:: Kiểm tra PM2 có tồn tại không
+where pm2 >nul 2>&1
+if %errorlevel% neq 0 (
+    echo PM2 not found. Installing...
+    call npm install -g pm2
 )
 
-:loop
-echo.
-echo [%date% %time%] Starting Telegram Bot via safe-startup...
-echo.
+:: Kiểm tra node_modules
+if not exist "node_modules\dotenv" (
+    echo Installing dependencies...
+    call npm install
+)
 
-node backend\safe-startup.js >> bot_crash_log.txt 2>&1
+echo Starting bot via PM2...
+
+pm2 start ecosystem.config.js
 
 echo.
-echo [%date% %time%] Bot exited. Restarting in 3 seconds...
-echo   Log file: %~dp0bot_crash_log.txt
-echo   Press Ctrl+C to stop.
-timeout /t 3 /nobreak >nul
-goto loop
+echo ========================================
+echo   Bot started!
+echo   Check status: pm2 status
+echo   View logs:    pm2 logs antibridge-bot
+echo   Stop bot:     stop_bot.bat
+echo ========================================
+echo.
+echo Auto-startup is configured via Windows Startup folder.
+echo Bot will start automatically when you log into Windows.
+echo.
+echo Done! Press any key to continue.
+pause
