@@ -24,6 +24,19 @@ class TerminalSession {
         this.cols = 80;
         this.rows = 150;
         this.createdAt = Date.now();
+        // UUID riêng cho Claude session trong Terminal này
+        // Giúp tách biệt conversation Telegram khỏi conversation local
+        this.claudeSessionId = TerminalSession._generateUuid();
+    }
+
+    /**
+     * Tạo UUID v4 đơn giản (không cần dependency)
+     */
+    static _generateUuid() {
+        return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
+            const r = Math.random() * 16 | 0;
+            return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16);
+        });
     }
 
     // Lazy load node-pty - chỉ load khi cần, tránh crash khi AttachConsole failed
@@ -203,6 +216,14 @@ class TerminalSession {
         // Reset activeMsgId để lệnh chat mới luôn sinh ra bubble terminal mới
         this.activeMsgId = null;
 
+        // Nếu user gõ "claude" (chính xác từ đó, ko có tham số), inject --session-id
+        // để tách conversation Telegram khỏi conversation local máy
+        const trimmed = text.trim();
+        if (/^claude\s*$/.test(trimmed)) {
+            text = `claude --session-id ${this.claudeSessionId}`;
+            console.log(`🔑 [${this.name}] Claude session ID: ${this.claudeSessionId}`);
+        }
+
         // Gửi text trước (giả lập thao tác paste)
         this.ptyProcess.write(text);
 
@@ -323,7 +344,8 @@ class TerminalSession {
             cwd: this.cwd,
             isRunning: this.isRunning(),
             createdAt: this.createdAt,
-            uptime: this.isRunning() ? Date.now() - this.createdAt : null
+            uptime: this.isRunning() ? Date.now() - this.createdAt : null,
+            claudeSessionId: this.claudeSessionId
         };
     }
 }

@@ -466,6 +466,9 @@ class TelegramBotService {
             const status = s.isRunning ? 'Running' : 'Stopped';
             const cwdShort = s.cwd.length > 30 ? '...' + s.cwd.slice(-27) : s.cwd;
             panel += `${icon} *${s.name}* — \`${cwdShort}\`\n   Status: ${status}\n\n`;
+            if (s.claudeSessionId) {
+                panel += `   🆔 Claude: \`${s.claudeSessionId}\`\n`;
+            }
         }
 
         // Build inline keyboard
