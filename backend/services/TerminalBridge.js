@@ -4,6 +4,7 @@
  */
 
 const TerminalSession = require('./TerminalSession');
+const ConversationAutoSave = require('./ConversationAutoSave');
 
 class TerminalBridge {
     constructor(telegramBotService) {
@@ -12,6 +13,7 @@ class TerminalBridge {
         this.activeSessionId = null;
         this._nextId = 1;
         this._savedCwd = null;
+        this._autoSaveWatchers = new Map(); // projectDir -> { count, watcher }
     }
 
     // ==========================================
@@ -38,8 +40,50 @@ class TerminalBridge {
         this.sessions.set(name, session);
         this.activeSessionId = name;
 
+        // Auto-start conversation saver cho project directory này
+        this._ensureAutoSave(actualCwd);
+
         console.log(`✅ [TerminalBridge] Created session: ${name} (cwd: ${actualCwd})`);
         return session;
+    }
+
+    /**
+     * Đảm bảo ConversationAutoSave đang chạy cho project directory
+     */
+    _ensureAutoSave(cwd) {
+        try {
+            const existing = this._autoSaveWatchers.get(cwd);
+            if (existing) {
+                existing.count++;
+                return;
+            }
+
+            const watcher = new ConversationAutoSave(cwd);
+            watcher.start();
+            this._autoSaveWatchers.set(cwd, { count: 1, watcher });
+            console.log(`💾 [TerminalBridge] AutoSave started for ${cwd}`);
+        } catch (e) {
+            console.log(`⚠️ [TerminalBridge] AutoSave error: ${e.message}`);
+        }
+    }
+
+    /**
+     * Giảm reference count cho auto-save watcher
+     */
+    _releaseAutoSave(cwd) {
+        try {
+            const existing = this._autoSaveWatchers.get(cwd);
+            if (!existing) return;
+
+            existing.count--;
+            if (existing.count <= 0) {
+                existing.watcher.stop();
+                this._autoSaveWatchers.delete(cwd);
+                console.log(`💾 [TerminalBridge] AutoSave stopped for ${cwd}`);
+            }
+        } catch (e) {
+            console.log(`⚠️ [TerminalBridge] Release auto-save error: ${e.message}`);
+        }
     }
 
     /**
@@ -69,6 +113,8 @@ class TerminalBridge {
         const session = this.sessions.get(name);
         if (!session) return false;
 
+        const cwd = session.cwd;
+
         if (graceful) {
             await session.stopGraceful(2000);
         } else {
@@ -76,6 +122,9 @@ class TerminalBridge {
         }
 
         this.sessions.delete(name);
+
+        // Release auto-save watcher cho project này
+        this._releaseAutoSave(cwd);
 
         // Nếu là active session thì chuyển sang session khác
         if (this.activeSessionId === name) {
@@ -105,6 +154,12 @@ class TerminalBridge {
         } else {
             sessions.forEach(s => s.stop());
         }
+
+        // Dừng toàn bộ auto-save watchers
+        for (const [dir, entry] of this._autoSaveWatchers) {
+            entry.watcher.stop();
+        }
+        this._autoSaveWatchers.clear();
 
         console.log(`💀 [TerminalBridge] Killed all ${sessions.length} sessions`);
         return sessions.length;
