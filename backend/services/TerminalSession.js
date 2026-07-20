@@ -24,19 +24,33 @@ class TerminalSession {
         this.cols = 80;
         this.rows = 150;
         this.createdAt = Date.now();
-        // UUID riêng cho Claude session trong Terminal này
-        // Giúp tách biệt conversation Telegram khỏi conversation local
-        this.claudeSessionId = TerminalSession._generateUuid();
+        // Session ID dùng chung — sync giữa Telegram terminal và local máy
+        this.claudeSessionId = TerminalSession._getOrCreateSharedSessionId(this.cwd);
     }
 
     /**
-     * Tạo UUID v4 đơn giản (không cần dependency)
+     * Tạo / đọc shared session ID từ file .claude-sync-session trong project.
+     * Dùng chung cho cả Telegram terminal và local machine → cùng 1 conversation.
      */
-    static _generateUuid() {
-        return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
+    static _getOrCreateSharedSessionId(cwd) {
+        const syncFile = path.join(cwd, '.claude-sync-session');
+        try {
+            if (fs.existsSync(syncFile)) {
+                const existing = fs.readFileSync(syncFile, 'utf8').trim();
+                if (existing) return existing;
+            }
+        } catch (_) {}
+
+        // Tạo UUID v4 mới và lưu lại
+        const uuid = 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
             const r = Math.random() * 16 | 0;
             return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16);
         });
+        try {
+            fs.writeFileSync(syncFile, uuid, 'utf8');
+            console.log(`🔑 [TerminalSession] Created shared session ID: ${uuid} → ${syncFile}`);
+        } catch (_) {}
+        return uuid;
     }
 
     // Lazy load node-pty - chỉ load khi cần, tránh crash khi AttachConsole failed
@@ -222,7 +236,17 @@ class TerminalSession {
         if (/^claude\s*$/.test(trimmed)) {
             text = `claude --session-id ${this.claudeSessionId}`;
             console.log(`🔑 [${this.name}] Claude session ID: ${this.claudeSessionId}`);
-        }
+
+            // Thông báo cho user biết cách resume trên máy tính
+            this.telegramBot.sendMessage(
+                `🔄 Đã khởi động Claude với session ID:\n\`${this.claudeSessionId}\`\n\n` +
+                `📝 *Resume trên máy tính:*\n` +
+                `\`\`\`\ncd ${this.cwd}\n` +
+                `Get-Content .claude-sync-session -Raw | ` +
+                `ForEach { claude --session-id $_ }\n\`\`\`\n` +
+                `🌐 Hoặc: \`claude -r ${this.claudeSessionId}\``,
+                { parse_mode: 'Markdown' }
+            ).catch(e => console.log(`⚠️ [${this.name}] Send session info error: ${e.message}`));
 
         // Gửi text trước (giả lập thao tác paste)
         this.ptyProcess.write(text);
