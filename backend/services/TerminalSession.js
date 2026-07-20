@@ -84,12 +84,28 @@ class TerminalSession {
         try {
             // node-pty process - bọc try/catch để không crash bot khi AttachConsole failed
             const nodePty = this._getPty();
+
+            // Lọc environment: loại bỏ biến Claude để PTY không auto-resume session cũ
+            // Trên local terminal (mở PowerShell mới) các biến này không tồn tại,
+            // nên claude trong PTY cũng cần môi trường sạch như vậy.
+            const cleanEnv = {};
+            for (const key of Object.keys(process.env)) {
+                // Bỏ qua biến Claude session/child — giữ API key và base URL để còn gọi API
+                if (key.startsWith('CLAUDE_CODE_SESSION') ||
+                    key === 'CLAUDE_CODE_CHILD_SESSION' ||
+                    key === 'CLAUDE_CODE_ENTRYPOINT' ||
+                    key === 'CLAUDE_CODE_EXECPATH') {
+                    continue;
+                }
+                cleanEnv[key] = process.env[key];
+            }
+
             this.ptyProcess = nodePty.spawn(shell, [], {
                 name: 'xterm-256color',
                 cols: this.cols,
                 rows: this.rows,
                 cwd: this.cwd,
-                env: process.env
+                env: cleanEnv
             });
         } catch (e) {
             console.error(`❌ [${this.name}] Lỗi khởi tạo pty: ${e.message}`);
