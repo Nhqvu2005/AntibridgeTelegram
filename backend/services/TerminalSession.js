@@ -246,6 +246,7 @@ class TerminalSession {
                 `Hoặc chạy file \`claude-sync.bat\` trong project.`,
                 { parse_mode: 'Markdown' }
             ).catch(e => console.log(`⚠️ [${this.name}] Send session info error: ${e.message}`));
+        }
 
         // Gửi text trước (giả lập thao tác paste)
         this.ptyProcess.write(text);
