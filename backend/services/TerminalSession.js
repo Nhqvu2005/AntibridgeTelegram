@@ -4,6 +4,9 @@
  */
 
 const { Terminal } = require('@xterm/headless');
+const fs = require('fs');
+const path = require('path');
+const os = require('os');
 
 class TerminalSession {
     constructor(telegramBot, name, cwd) {
@@ -126,8 +129,8 @@ class TerminalSession {
     }
 
     /**
-     * Graceful shutdown — gửi Ctrl+C và Ctrl+D để Claude Code save conversation
-     * trước khi kill pty. Tránh mất conversation history khi bot restart/sập.
+     * Graceful shutdown — gửi lệnh /exit cho Claude Code trước khi kill pty,
+     * đảm bảo conversation được flush ra .jsonl kịp thời.
      * @param {number} timeoutMs - thời gian chờ Claude save (mặc định 3s)
      */
     async stopGraceful(timeoutMs = 3000) {
@@ -138,27 +141,33 @@ class TerminalSession {
 
         if (this.ptyProcess) {
             try {
-                // Step 1: Ctrl+C để ngắt mọi operation đang chạy
-                console.log(`   [${this.name}] Sending Ctrl+C...`);
-                this.ptyProcess.write('\x03');
-                await new Promise(r => setTimeout(r, 500));
+                // Step 1: Gửi lệnh /exit vào PTY — nếu Claude đang chạy, nó sẽ
+                // nhận được lệnh này, save conversation, và thoát.
+                // Nếu chỉ có shell prompt, /exit sẽ báo "command not found".
+                console.log(`   [${this.name}] Sending /exit to Claude...`);
+                this.ptyProcess.write('/exit\r');
+                await new Promise(r => setTimeout(r, 1500));
 
-                // Step 2: Ctrl+D (EOF) để yêu cầu Claude Code graceful exit
-                // Claude sẽ flush conversation ra .jsonl trước khi thoát
-                console.log(`   [${this.name}] Sending Ctrl+D (EOF)...`);
-                this.ptyProcess.write('\x04');
+                // Step 2: Nếu Claude đã thoát (step 1), lúc này đang ở shell prompt.
+                // Gửi exit để đóng shell.
+                console.log(`   [${this.name}] Sending exit to shell...`);
+                this.ptyProcess.write('exit\r');
+                await new Promise(r => setTimeout(r, 800));
 
-                // Chờ Claude save conversation
-                console.log(`   [${this.name}] Waiting ${timeoutMs}ms for save...`);
-                await new Promise(r => setTimeout(r, timeoutMs));
-
-                // Step 3: Ctrl+C dự phòng nếu pty chưa exit
+                // Step 3: Ctrl+C dự phòng — nếu có process nào còn chạy
                 if (this.ptyProcess) {
+                    console.log(`   [${this.name}] Sending Ctrl+C (fallback)...`);
                     this.ptyProcess.write('\x03');
-                    await new Promise(r => setTimeout(r, 200));
+                    await new Promise(r => setTimeout(r, 500));
+                }
+
+                // Step 4: Chờ thêm thời gian cho Claude kịp flush file
+                const remainingWait = Math.max(0, timeoutMs - 2800);
+                if (remainingWait > 0 && this.ptyProcess) {
+                    console.log(`   [${this.name}] Waiting ${remainingWait}ms more for save...`);
+                    await new Promise(r => setTimeout(r, remainingWait));
                 }
             } catch (e) {
-                // Nếu pty đã exit từ Ctrl+D thì bỏ qua lỗi
                 if (e.message && !e.message.includes('Cannot read properties of null')) {
                     console.log(`⚠️ [${this.name}] Graceful shutdown error: ${e.message}`);
                 }
@@ -166,6 +175,21 @@ class TerminalSession {
         }
 
         console.log(`   [${this.name}] Hard cleanup...`);
+
+        // Final safety: copy .jsonl → .jsonl.bak nếu có thể
+        try {
+            const slug = this.cwd.replace(/:/g, '-').replace(/[\\/]/g, '-');
+            const projectDir = path.join(os.homedir(), '.claude', 'projects', slug);
+            if (fs.existsSync(projectDir)) {
+                const files = fs.readdirSync(projectDir);
+                for (const f of files.filter(f => f.endsWith('.jsonl') && !f.endsWith('.bak'))) {
+                    const src = path.join(projectDir, f);
+                    const dst = path.join(projectDir, f + '.bak');
+                    try { fs.copyFileSync(src, dst); } catch (_) { }
+                }
+            }
+        } catch (_) {}
+
         this.stop();
     }
 

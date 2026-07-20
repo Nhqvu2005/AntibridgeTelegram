@@ -5,13 +5,18 @@
  * vào file .jsonl nhưng OS có thể buffer chưa flush xuống đĩa. Nếu máy sập
  * bất ngờ (mất điện, blue screen) thì mất conversation.
  *
- * Giải pháp: Mở file .jsonl và gọi fsync() định kỳ để force OS flush
- * xuống ổ cứng, đảm bảo dữ liệu luôn được lưu real-time.
+ * Giải pháp Windows:
+ * - fsync từ Node.js không hiệu quả cross-process trên Windows vì file lock
+ * - Dùng PowerShell để mở file với FILE_SHARE_READ | FILE_SHARE_WRITE
+ *   và gọi FlushFileBuffers API → force OS flush xuống ổ cứng
+ *
+ * Ngoài ra còn backup copy .jsonl → .jsonl.bak để dự phòng.
  */
 
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
+const { exec } = require('child_process');
 
 class ConversationAutoSave {
     /**
@@ -25,7 +30,7 @@ class ConversationAutoSave {
         this.projectDir = path.join(os.homedir(), '.claude', 'projects', this.projectSlug);
         this.interval = null;
         this._isRunning = false;
-        this._watchedFds = new Map(); // filePath -> { fd, mtime }
+        this._lastFlush = {}; // filePath -> lastSize
         this._lastCleanup = Date.now();
     }
 
@@ -34,7 +39,7 @@ class ConversationAutoSave {
      * VD: E:\Job\DayroiDayroi → E--Job-DayroiDayroi
      */
     static _getProjectSlug(cwd) {
-        return cwd.replace(/:/g, '').replace(/[\\/]/g, '-');
+        return cwd.replace(/:/g, '-').replace(/[\\/]/g, '-');
     }
 
     /**
@@ -47,11 +52,11 @@ class ConversationAutoSave {
         console.log(`💾 [ConversationAutoSave] Theo dõi ${this.projectDir} (mỗi ${this.intervalMs}ms)`);
 
         this.interval = setInterval(() => {
-            this._flushJsonlFiles();
+            this._flushJsonlFiles().catch(() => {});
         }, this.intervalMs);
 
         // Flush ngay lập tức lần đầu
-        setTimeout(() => this._flushJsonlFiles(), 500);
+        setTimeout(() => this._flushJsonlFiles().catch(() => {}), 500);
     }
 
     /**
@@ -63,21 +68,16 @@ class ConversationAutoSave {
             clearInterval(this.interval);
             this.interval = null;
         }
-        this._closeAllFds();
+        // Final flush — đảm bảo mọi thứ được sync trước khi dừng
+        this._flushJsonlFiles().catch(() => {});
         console.log('💾 [ConversationAutoSave] Stopped');
-    }
-
-    _closeAllFds() {
-        for (const [filePath, entry] of this._watchedFds) {
-            try { fs.closeSync(entry.fd); } catch (_) { }
-        }
-        this._watchedFds.clear();
     }
 
     /**
      * Flush toàn bộ file .jsonl trong project folder xuống đĩa
+     * Dùng PowerShell FlushFileBuffers trên Windows
      */
-    _flushJsonlFiles() {
+    async _flushJsonlFiles() {
         try {
             if (!fs.existsSync(this.projectDir)) return;
 
@@ -88,73 +88,71 @@ class ConversationAutoSave {
                 const filePath = path.join(this.projectDir, file);
                 try {
                     const stat = fs.statSync(filePath);
-                    if (!stat.isFile()) continue;
+                    if (!stat.isFile() || stat.size === 0) continue;
 
-                    const mtime = stat.mtimeMs;
-                    const watched = this._watchedFds.get(filePath);
+                    const prevSize = this._lastFlush[filePath] || 0;
+                    if (stat.size === prevSize) continue; // không thay đổi → skip
 
-                    if (watched && watched.mtime === mtime) {
-                        // File không thay đổi — skip
-                        continue;
+                    this._lastFlush[filePath] = stat.size;
+
+                    // === Flush file xuống đĩa — dùng PowerShell (Windows) ===
+                    try {
+                        // PowerShell: mở file với write sharing, gọi Flush($true)
+                        // Dùng base64 encode để tránh issues với ký tự đặc biệt trong path
+                        const pathB64 = Buffer.from(filePath, 'utf8').toString('base64');
+                        const psScript = `
+                            $path = [System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${pathB64}'))
+                            $f = [System.IO.File]::Open($path, [System.IO.FileMode]::Open, [System.IO.FileAccess]::ReadWrite, [System.IO.FileShare]::ReadWrite)
+                            $f.Flush($true)
+                            $f.Close()
+                        `.trim().replace(/\n/g, '; ').replace(/\s+/g, ' ').trim();
+                        await new Promise((resolve, reject) => {
+                            exec(`powershell -NoProfile -NonInteractive -Command "${psScript}"`,
+                                { timeout: 10000, windowsHide: true },
+                                (err) => err ? reject(err) : resolve()
+                            );
+                        });
+                    } catch (e) {
+                        // PowerShell thất bại — thử Node.js fsync fallback
+                        this._fallbackFsync(filePath);
                     }
 
-                    // File mới hoặc đã thay đổi → cần fsync
-                    if (!watched) {
-                        // File mới — mở fd
-                        try {
-                            const fd = fs.openSync(filePath, 'r+');
-                            this._watchedFds.set(filePath, { fd, mtime });
-                            fs.fsyncSync(fd);
-                        } catch (e) {
-                            // Có thể file đang bị process khác dùng exclusive lock
-                            // Thử mở read-only và fsync (có thể không hiệu quả trên Windows)
-                            try {
-                                const fd = fs.openSync(filePath, 'r');
-                                fs.fsyncSync(fd);
-                                fs.closeSync(fd);
-                            } catch (_) { }
-                        }
-                    } else {
-                        // File đã thay đổi — fsync
-                        try {
-                            fs.fsyncSync(watched.fd);
-                            watched.mtime = mtime;
-                        } catch (e) {
-                            // fd có thể bị invalid, xóa khỏi watch
-                            try { fs.closeSync(watched.fd); } catch (_) { }
-                            this._watchedFds.delete(filePath);
-                        }
-                    }
-                } catch (e) {
-                    // File có thể bị xóa hoặc không truy cập được
-                    this._watchedFds.delete(filePath);
+                    // === Backup copy (phòng file gốc hỏng) ===
+                    this._backupJsonl(filePath);
+
+                } catch (_) {
+                    // File không truy cập được
                 }
             }
 
-            // Dọn dẹp fd cho file không còn tồn tại
-            this._cleanupStaleFds(jsonlFiles);
-
-        } catch (e) {
-            // Thư mục chưa tồn tại — ignore
+        } catch (_) {
+            // Thư mục chưa tồn tại
         }
     }
 
     /**
-     * Đóng fd của file đã bị xóa hoặc không còn trong danh sách
+     * Fallback: dùng Node.js fsync (kém hiệu quả trên Windows hơn PowerShell)
      */
-    _cleanupStaleFds(currentFiles) {
-        const currentSet = new Set(currentFiles.map(f => path.join(this.projectDir, f)));
-        for (const [filePath, entry] of this._watchedFds) {
-            if (!currentSet.has(filePath)) {
-                try { fs.closeSync(entry.fd); } catch (_) { }
-                this._watchedFds.delete(filePath);
-            }
-        }
+    _fallbackFsync(filePath) {
+        try {
+            const fd = fs.openSync(filePath, 'r');
+            try { fs.fsyncSync(fd); } catch (_) { }
+            fs.closeSync(fd);
+        } catch (_) { }
+    }
 
-        // Dọn dẹp period (tránh memory leak)
-        if (Date.now() - this._lastCleanup > 60000) {
-            this._lastCleanup = Date.now();
-        }
+    /**
+     * Backup .jsonl → .jsonl.bak (chỉ khi file có thay đổi kích thước)
+     * Giới hạn 10MB để tránh copy file quá lớn mỗi 3s
+     */
+    _backupJsonl(filePath) {
+        try {
+            const stat = fs.statSync(filePath);
+            if (stat.size > 10 * 1024 * 1024) return; // >10MB thì skip backup
+
+            const bakPath = filePath + '.bak';
+            fs.copyFileSync(filePath, bakPath);
+        } catch (_) { }
     }
 
     /**
@@ -164,7 +162,7 @@ class ConversationAutoSave {
         return {
             projectDir: this.projectDir,
             isRunning: this._isRunning,
-            watchedFiles: Array.from(this._watchedFds.keys()).map(p => path.basename(p)),
+            flushedFiles: Object.keys(this._lastFlush).map(p => path.basename(p)),
             intervalMs: this.intervalMs
         };
     }
