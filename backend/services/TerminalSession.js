@@ -26,6 +26,7 @@ class TerminalSession {
         this.createdAt = Date.now();
         // Session ID dùng chung — sync giữa Telegram terminal và local máy
         this.claudeSessionId = TerminalSession._getOrCreateSharedSessionId(this.cwd);
+        this._sessionDetectInterval = null;
     }
 
     /**
@@ -153,6 +154,7 @@ class TerminalSession {
         this.isFlushing = false;
         this.needsFlush = false;
         this.isShuttingDown = false;
+        this._stopSessionDetection();
     }
 
     /**
@@ -225,27 +227,30 @@ class TerminalSession {
     }
 
     write(text) {
-        if (!this.ptyProcess) this.start();
+        if (!this.ptyProcess) {
+            this.start();
+            // Khi start session mới, bắt đầu theo dõi session ID thực tế
+            this._startSessionDetection();
+        }
 
         // Reset activeMsgId để lệnh chat mới luôn sinh ra bubble terminal mới
         this.activeMsgId = null;
 
-        // Nếu user gõ "claude" (chính xác từ đó, ko có tham số), inject --session-id
-        // để tách conversation Telegram khỏi conversation local máy
         const trimmed = text.trim();
-        if (/^claude\s*$/.test(trimmed)) {
-            text = `claude --session-id ${this.claudeSessionId}`;
-            console.log(`🔑 [${this.name}] Claude session ID: ${this.claudeSessionId}`);
 
-            // Thông báo cho user biết cách resume trên máy tính
+        // Nếu user gõ "claude" — chỉ chạy claude đơn giản, KHÔNG gán --session-id
+        // Claude sẽ tự tạo/resume session, và ta sẽ detect session ID thực tế sau
+        if (/^claude\s*$/.test(trimmed)) {
+            console.log(`🔄 [${this.name}] Starting Claude (let it manage its own session)...`);
             this.telegramBot.sendMessage(
-                `🔄 Đã khởi động Claude với session ID:\n\`${this.claudeSessionId}\`\n\n` +
-                `📝 *Resume trên máy tính:*\n` +
-                `\`\`\`\ncd ${this.cwd}\n` +
-                `claude --session-id ${this.claudeSessionId}\n\`\`\`\n\n` +
-                `Hoặc chạy file \`claude-sync.bat\` trong project.`,
-                { parse_mode: 'Markdown' }
-            ).catch(e => console.log(`⚠️ [${this.name}] Send session info error: ${e.message}`));
+                `🔄 Starting Claude...\nSession sẽ được tự động phát hiện và ghi vào \`.claude-sync-session\``
+            ).catch(() => {});
+            // text giữ nguyên là "claude" — ko thêm --session-id
+            this.ptyProcess.write(text);
+            setTimeout(() => {
+                if (this.ptyProcess) this.ptyProcess.write('\r');
+            }, 100);
+            return;
         }
 
         // Gửi text trước (giả lập thao tác paste)
@@ -258,8 +263,99 @@ class TerminalSession {
     }
 
     writeRaw(data) {
-        if (!this.ptyProcess) this.start();
+        if (!this.ptyProcess) {
+            this.start();
+            this._startSessionDetection();
+        }
         this.ptyProcess.write(data);
+    }
+
+    // ─── Session ID Detection ──────────────────────────────────────────────
+    // Khi Claude chạy trong PTY, nó tự quản lý session ID.
+    // Ta cần detect file .jsonl nào đang được ghi để cập nhật .claude-sync-session.
+    // ────────────────────────────────────────────────────────────────────────
+
+    /**
+     * Bắt đầu theo dõi session ID thực tế của Claude.
+     * Quét thư mục .claude/projects/<slug>/ mỗi 3s để tìm .jsonl đang active.
+     */
+    _startSessionDetection() {
+        if (this._sessionDetectInterval) return;
+
+        const slug = this.cwd.replace(/:/g, '-').replace(/[\\/]/g, '-');
+        const projectDir = path.join(os.homedir(), '.claude', 'projects', slug);
+        const syncFile = path.join(this.cwd, '.claude-sync-session');
+
+        let lastDetectedId = null;
+
+        console.log(`🔍 [${this.name}] Session detection started → ${projectDir}`);
+
+        this._sessionDetectInterval = setInterval(() => {
+            try {
+                if (!fs.existsSync(projectDir)) return;
+
+                // Lấy tất cả file .jsonl (ko tính .bak)
+                let files = fs.readdirSync(projectDir)
+                    .filter(f => f.endsWith('.jsonl') && !f.endsWith('.bak'))
+                    .map(f => ({
+                        name: f,
+                        path: path.join(projectDir, f),
+                        mtime: fs.statSync(path.join(projectDir, f)).mtimeMs
+                    }))
+                    .sort((a, b) => b.mtime - a.mtime); // mới nhất lên đầu
+
+                if (files.length === 0) return;
+
+                // File .jsonl được modify gần đây nhất là session đang active
+                const newest = files[0];
+                const detectedId = newest.name.replace('.jsonl', '');
+
+                // Nếu file này mới hơn 30s → đang active
+                const age = Date.now() - newest.mtime;
+                if (age > 30000) return; // quá cũ, bỏ qua
+
+                if (detectedId !== lastDetectedId) {
+                    lastDetectedId = detectedId;
+                    console.log(`🔍 [${this.name}] Detected active session: ${detectedId} (${Math.round(age/1000)}s old)`);
+
+                    // Kiểm tra file sync có cần update ko
+                    let currentSyncId = null;
+                    try {
+                        if (fs.existsSync(syncFile)) {
+                            currentSyncId = fs.readFileSync(syncFile, 'utf8').trim();
+                        }
+                    } catch (_) {}
+
+                    if (detectedId !== currentSyncId) {
+                        try {
+                            fs.writeFileSync(syncFile, detectedId, 'utf8');
+                            console.log(`🔑 [${this.name}] Updated .claude-sync-session → ${detectedId}`);
+                            this.claudeSessionId = detectedId;
+
+                            // Reset activeMsgId để lần flush tới tạo message mới với session info
+                            if (this.isRunning()) {
+                                // Gửi thông báo session mới (nhưng không spam)
+                                this.telegramBot.sendMessage(
+                                    `📝 Session: \`${detectedId}\``,
+                                    { parse_mode: 'Markdown' }
+                                ).catch(() => {});
+                            }
+                        } catch (e) {
+                            console.log(`⚠️ [${this.name}] Could not write .claude-sync-session: ${e.message}`);
+                        }
+                    }
+                }
+            } catch (e) {
+                // Silent — không crash vì lỗi detection
+            }
+        }, 3000);
+    }
+
+    _stopSessionDetection() {
+        if (this._sessionDetectInterval) {
+            clearInterval(this._sessionDetectInterval);
+            this._sessionDetectInterval = null;
+        }
     }
 
     sendCtrlC() {
