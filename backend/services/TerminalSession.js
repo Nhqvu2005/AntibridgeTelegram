@@ -239,9 +239,13 @@ class TerminalSession {
         const trimmed = text.trim();
 
         // Nếu user gõ "claude" — chỉ chạy claude đơn giản, KHÔNG gán --session-id
-        // Claude sẽ tự tạo/resume session, và ta sẽ detect session ID thực tế sau
+        // Quan trọng: dọn session tracking file cũ để claude tạo session MỚI
         if (/^claude\s*$/.test(trimmed)) {
             console.log(`🔄 [${this.name}] Starting Claude (let it manage its own session)...`);
+
+            // Dọn session tracking file cũ (PID không còn chạy)
+            this._cleanStaleSessionFiles();
+
             this.telegramBot.sendMessage(
                 `🔄 Starting Claude...\nSession sẽ được tự động phát hiện và ghi vào \`.claude-sync-session\``
             ).catch(() => {});
@@ -274,6 +278,51 @@ class TerminalSession {
     // Khi Claude chạy trong PTY, nó tự quản lý session ID.
     // Ta cần detect file .jsonl nào đang được ghi để cập nhật .claude-sync-session.
     // ────────────────────────────────────────────────────────────────────────
+
+    /**
+     * Dọn session tracking file cũ của claude.
+     * File ở ~/.claude/sessions/<pid>.json chứa session ID + cwd.
+     * Nếu PID không còn chạy nữa, claude sẽ auto-resume session cũ thay vì tạo mới.
+     * Xóa nó đi → lần chạy claude tiếp theo sẽ tạo session MỚI.
+     */
+    _cleanStaleSessionFiles() {
+        const sessionsDir = path.join(os.homedir(), '.claude', 'sessions');
+        if (!fs.existsSync(sessionsDir)) return;
+
+        const files = fs.readdirSync(sessionsDir).filter(f => f.endsWith('.json'));
+        let cleaned = 0;
+
+        for (const file of files) {
+            try {
+                const content = JSON.parse(fs.readFileSync(path.join(sessionsDir, file), 'utf8'));
+                if (content.cwd === this.cwd) {
+                    // process.kill(pid, 0) = kiểm tra PID còn sống ko (ESRCH = dead)
+                    let alive = true;
+                    try {
+                        process.kill(content.pid, 0);
+                    } catch (e) {
+                        alive = (e.code === 'ESRCH' ? false : true);
+                    }
+
+                    if (!alive) {
+                        fs.unlinkSync(path.join(sessionsDir, file));
+                        console.log(`🧹 [${this.name}] Removed stale session: ${content.sessionId} (PID ${content.pid} not running)`);
+                        cleaned++;
+                    }
+                }
+            } catch (_) {
+                // File lỗi format hoặc ko đọc được → xóa luôn cho sạch
+                try {
+                    fs.unlinkSync(path.join(sessionsDir, file));
+                    cleaned++;
+                } catch (_) {}
+            }
+        }
+
+        if (cleaned > 0) {
+            console.log(`🧹 [${this.name}] Cleaned ${cleaned} stale session file(s)`);
+        }
+    }
 
     /**
      * Bắt đầu theo dõi session ID thực tế của Claude.
