@@ -65,11 +65,16 @@ class TerminalBridge {
     /**
      * Kill session cụ thể
      */
-    killSession(name) {
+    async killSession(name, graceful = true) {
         const session = this.sessions.get(name);
         if (!session) return false;
 
-        session.stop();
+        if (graceful) {
+            await session.stopGraceful(2000);
+        } else {
+            session.stop();
+        }
+
         this.sessions.delete(name);
 
         // Nếu là active session thì chuyển sang session khác
@@ -89,26 +94,33 @@ class TerminalBridge {
     /**
      * Kill toàn bộ sessions
      */
-    killAllSessions() {
-        const count = this.sessions.size;
-        for (const [name] of this.sessions) {
-            this.killSession(name);
+    async killAllSessions(graceful = true) {
+        const sessions = Array.from(this.sessions.values());
+        this.sessions.clear();
+        this.activeSessionId = null;
+
+        if (graceful) {
+            // Graceful tất cả song song — mỗi session mất ~2s
+            await Promise.all(sessions.map(s => s.stopGraceful(2000)));
+        } else {
+            sessions.forEach(s => s.stop());
         }
-        console.log(`💀 [TerminalBridge] Killed all ${count} sessions`);
-        return count;
+
+        console.log(`💀 [TerminalBridge] Killed all ${sessions.length} sessions`);
+        return sessions.length;
     }
 
     /**
      * Restart active session (kill + tạo mới)
      */
-    restartActiveSession() {
+    async restartActiveSession() {
         const session = this.getActiveSession();
         if (!session) return null;
 
         const name = session.name;
         const cwd = session.cwd;
 
-        this.killSession(name);
+        await this.killSession(name, true);
         return this.createSession(name, cwd);
     }
 
@@ -161,8 +173,8 @@ class TerminalBridge {
         }
     }
 
-    stop() {
-        this.killAllSessions();
+    async stop() {
+        await this.killAllSessions(true);
     }
 
     write(text) {

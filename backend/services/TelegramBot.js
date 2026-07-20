@@ -343,7 +343,7 @@ class TelegramBotService {
             await this.sendMessage(`💻 Đã chuyển sang chế độ **Terminal Mode**.\n📁 Dir: \`${ptyPath || 'default'}\`\nGõ lệnh trực tiếp vào đây (vd: \`claude\` hoặc \`ls\`). Dùng /ctrl_c để ngắt lệnh.`, { parse_mode: 'Markdown' });
         } else if (modeArg === 'antigravity') {
             this.currentMode = 'antigravity';
-            this.terminalBridge.stop();
+            await this.terminalBridge.stop();
             await this.sendMessage('🌌 Đã chuyển sang chế độ **Antigravity Mode**.');
         } else {
             // Toggle
@@ -353,7 +353,7 @@ class TelegramBotService {
                 await this.sendMessage(`💻 Đã chuyển sang chế độ **Terminal Mode**.\n📁 Dir: \`${ptyPath || 'default'}\`\nGõ lệnh trực tiếp vào đây. Dùng /ctrl_c để ngắt lệnh.`, { parse_mode: 'Markdown' });
             } else {
                 this.currentMode = 'antigravity';
-                this.terminalBridge.stop();
+                await this.terminalBridge.stop();
                 await this.sendMessage('🌌 Đã chuyển sang chế độ **Antigravity Mode**.');
             }
         }
@@ -374,7 +374,7 @@ class TelegramBotService {
             await this.sendMessage('Chỉ dùng được trong /mode terminal.');
             return;
         }
-        const session = this.terminalBridge.restartActiveSession();
+        const session = await this.terminalBridge.restartActiveSession();
         if (session) {
             await this.sendMessage(`💀 Đã kill và restart session **${session.name}** tại \`${session.cwd}\`.`, { parse_mode: 'Markdown' });
         } else {
@@ -508,7 +508,7 @@ class TelegramBotService {
     }
 
     async _handleTermKill(name) {
-        const success = this.terminalBridge.killSession(name);
+        const success = await this.terminalBridge.killSession(name);
         if (success) {
             const remaining = this.terminalBridge.listSessions().length;
             if (remaining > 0) {
@@ -524,7 +524,7 @@ class TelegramBotService {
     }
 
     async _handleTermKillAll() {
-        const count = this.terminalBridge.killAllSessions();
+        const count = await this.terminalBridge.killAllSessions();
         this.currentMode = 'antigravity';
         await this.sendMessage(`🗑️ Đã kill toàn bộ ${count} session(s). Quay lại Antigravity mode.`, { parse_mode: 'Markdown' });
     }
@@ -1994,7 +1994,7 @@ ${hasCaption ? `    # Paste caption from UTF-8 file
                     }
                 } else if (action === 'term_killall') {
                     await this.bot.answerCallbackQuery(query.id, { text: '💀 Killing all sessions...' });
-                    const count = this.terminalBridge.killAllSessions();
+                    const count = await this.terminalBridge.killAllSessions();
                     this.currentMode = 'antigravity';
                     await this.bot.sendMessage(this.chatId, `🗑️ Đã kill toàn bộ ${count} session(s). Quay lại Antigravity mode.`, { parse_mode: 'Markdown' });
                 } else if (action.startsWith('term_switch_')) {
@@ -2007,7 +2007,7 @@ ${hasCaption ? `    # Paste caption from UTF-8 file
                 } else if (action.startsWith('term_kill_')) {
                     const name = action.replace('term_kill_', '');
                     await this.bot.answerCallbackQuery(query.id, { text: `🗑️ Killing ${name}...` });
-                    const success = this.terminalBridge.killSession(name);
+                    const success = await this.terminalBridge.killSession(name);
                     if (success) {
                         const remaining = this.terminalBridge.listSessions().length;
                         if (remaining === 0) this.currentMode = 'antigravity';
@@ -2066,7 +2066,7 @@ ${hasCaption ? `    # Paste caption from UTF-8 file
                         try {
                             if (this.currentMode === 'terminal') {
                                 this.terminalProjectRoot = finalPath;
-                                this.terminalBridge.stop();
+                                await this.terminalBridge.stop();
                                 this.terminalBridge.start(finalPath);
                                 await this.bot.sendMessage(this.chatId, `✅ Đã chuyển đổi thư mục Terminal Mode sang:\n\`${finalPath}\``, { parse_mode: 'Markdown' });
                                 return; // Dừng lại, không launch IDE!
@@ -2804,9 +2804,17 @@ ${hasCaption ? `    # Paste caption from UTF-8 file
     /**
      * Dọn dẹp khi shutdown
      */
-    stop() {
+    async stop() {
         if (this.streamingTimeout) {
             clearTimeout(this.streamingTimeout);
+        }
+        // Graceful shutdown terminal sessions trước (cho Claude kịp save)
+        if (this.terminalBridge) {
+            try {
+                await this.terminalBridge.stop();
+            } catch (e) {
+                console.log(`⚠️ Terminal bridge shutdown error: ${e.message}`);
+            }
         }
         if (this.bot) {
             this.bot.stopPolling();

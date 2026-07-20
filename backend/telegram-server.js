@@ -288,14 +288,40 @@ server.listen(WS_PORT, '127.0.0.1', () => {
 });
 
 // Graceful shutdown
-process.on('SIGINT', async () => {
+async function _shutdown() {
     console.log('\n🛑 Shutting down...');
-    telegramBot.stop();
-    await acceptDetector.stop();
+    try {
+        await telegramBot.stop();
+    } catch (e) {
+        console.log(`⚠️ Bot stop error: ${e.message}`);
+    }
+    try {
+        await acceptDetector.stop();
+    } catch (e) {
+        console.log(`⚠️ Detector stop error: ${e.message}`);
+    }
     server.close(() => {
         console.log('✅ Server closed');
         process.exit(0);
     });
+    // Safety fallback — nếu server.close treo thì thoát sau 8s
+    setTimeout(() => {
+        console.log('⚠️ Force exit after timeout');
+        process.exit(0);
+    }, 8000);
+}
+
+process.on('SIGINT', _shutdown);
+process.on('SIGTERM', _shutdown);
+
+// Catch uncaught exceptions & unhandled rejections — cố gắng graceful shutdown
+process.on('uncaughtException', (err) => {
+    console.error('\n💥 Uncaught Exception:', err.message);
+    _shutdown();
+});
+process.on('unhandledRejection', (reason) => {
+    console.error('\n💥 Unhandled Rejection:', reason);
+    _shutdown();
 });
 
 module.exports = { server, wss, telegramBot };
