@@ -242,9 +242,8 @@ class TerminalSession {
                 `🔄 Đã khởi động Claude với session ID:\n\`${this.claudeSessionId}\`\n\n` +
                 `📝 *Resume trên máy tính:*\n` +
                 `\`\`\`\ncd ${this.cwd}\n` +
-                `Get-Content .claude-sync-session -Raw | ` +
-                `ForEach { claude --session-id $_ }\n\`\`\`\n` +
-                `🌐 Hoặc: \`claude -r ${this.claudeSessionId}\``,
+                `claude --session-id ${this.claudeSessionId}\n\`\`\`\n\n` +
+                `Hoặc chạy file \`claude-sync.bat\` trong project.`,
                 { parse_mode: 'Markdown' }
             ).catch(e => console.log(`⚠️ [${this.name}] Send session info error: ${e.message}`));
 
