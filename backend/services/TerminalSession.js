@@ -15,12 +15,14 @@ class TerminalSession {
         this.cwd = cwd || process.cwd();
         this.ptyProcess = null;
         this.term = null;
-        this.debounceTimeout = null;
         this.activeMsgId = null;
         this.isActive = false;
-        this.needsFlush = false;
-        this.isFlushing = false;
-        this.flushInterval = 500;
+        // Flush management — data-driven settle timer + heartbeat
+        this._flushSettleTimer = null;      // 400ms no-data → flush
+        this._flushMaxTimer = null;         // 2s heartbeat during streaming
+        this._flushPending = false;         // Content arrived since last flush
+        this._flushGuard = false;           // Prevent concurrent flush
+        this._lastFlushTime = 0;            // Rate-limit tracker
         this.cols = 80;
         this.rows = 150;
         this.createdAt = Date.now();
@@ -120,7 +122,7 @@ class TerminalSession {
         this.ptyProcess.onData((data) => {
             if (this.term) {
                 this.term.write(data, () => {
-                    this.scheduleFlush();
+                    this._onDataReceived();
                 });
             }
         });
@@ -133,7 +135,7 @@ class TerminalSession {
                 } catch (err) {
                     // Term đã dispose rồi, ignore
                 }
-                this.scheduleFlush();
+                this._forceFlush().catch(() => {});
             }
             // KHÔNG tự restart - để user quyết định
             this.ptyProcess = null;
@@ -162,13 +164,10 @@ class TerminalSession {
             try { this.term.dispose(); } catch (_) {}
             this.term = null;
         }
-        if (this.debounceTimeout) {
-            clearTimeout(this.debounceTimeout);
-            this.debounceTimeout = null;
-        }
+        this._cancelFlushTimers();
         this.isActive = false;
-        this.isFlushing = false;
-        this.needsFlush = false;
+        this._flushPending = false;
+        this._flushGuard = false;
         this.isShuttingDown = false;
         this._stopSessionDetection();
     }
@@ -248,6 +247,10 @@ class TerminalSession {
             // Khi start session mới, bắt đầu theo dõi session ID thực tế
             this._startSessionDetection();
         }
+
+        // Force flush output còn đọng lại trước khi xử lý lệnh mới,
+        // tránh tình trạng output "đứng giữa chừng" trên Telegram.
+        this._forceFlush().catch(() => {});
 
         // Reset activeMsgId để lệnh chat mới luôn sinh ra bubble terminal mới
         this.activeMsgId = null;
@@ -429,31 +432,93 @@ class TerminalSession {
         this.telegramBot.sendMessage(`🛑 Đã gửi Ctrl+C tới Terminal session **${this.name}**.`);
     }
 
-    scheduleFlush() {
+    // ─── Data-driven flush management ─────────────────────────────────────
+    // Thay thế debounce cũ bằng cơ chế settle timer + heartbeat:
+    //   - Mỗi lần có data → reset settle timer (400ms)
+    //   - Nếu data chảy liên tục → heartbeat (2s) đảm bảo flush đều đặn
+    //   - Khi user gõ lệnh mới → force flush ngay trước khi reset activeMsgId
+    // ────────────────────────────────────────────────────────────────────────
+
+    _onDataReceived() {
         if (this.isShuttingDown) return;
-        this.needsFlush = true;
-        if (!this.isFlushing && !this.debounceTimeout) {
-            this.processFlushQueue();
+        this._flushPending = true;
+
+        // Reset settle timer: mỗi lần data đến → dời thêm 400ms
+        if (this._flushSettleTimer) {
+            clearTimeout(this._flushSettleTimer);
         }
+        this._flushSettleTimer = setTimeout(() => {
+            this._flushSettleTimer = null;
+            this._tryFlush();
+        }, 400);
+
+        // Heartbeat: nếu data chảy liên tục, vẫn flush ít nhất mỗi 2s
+        if (!this._flushMaxTimer) {
+            this._flushMaxTimer = setTimeout(() => {
+                this._flushMaxTimer = null;
+                if (this._flushPending) {
+                    this._tryFlush();
+                }
+            }, 2000);
+        }
+
+        // Thử flush ngay nếu đã đủ gap (data đến chậm, không cần chờ settle)
+        this._tryFlush();
     }
 
-    async processFlushQueue() {
-        if (!this.needsFlush) return;
+    async _tryFlush() {
+        if (!this._flushPending || this._flushGuard || this.isShuttingDown) return;
 
-        this.isFlushing = true;
-        this.needsFlush = false;
+        // Rate-limit: tối thiểu 500ms giữa các lần gọi Telegram API
+        if (Date.now() - this._lastFlushTime < 500) return;
+
+        this._flushGuard = true;
+        this._flushPending = false;
+        this._cancelFlushTimers();
 
         try {
             await this.flushOutput();
+            this._lastFlushTime = Date.now();
         } finally {
-            this.debounceTimeout = setTimeout(() => {
-                this.debounceTimeout = null;
-                this.isFlushing = false;
+            this._flushGuard = false;
+            // Nếu có data mới đến trong lúc flush, schedule settle lại
+            if (this._flushPending && !this._flushSettleTimer) {
+                this._flushSettleTimer = setTimeout(() => {
+                    this._flushSettleTimer = null;
+                    this._tryFlush();
+                }, 400);
+            }
+        }
+    }
 
-                if (this.needsFlush) {
-                    this.processFlushQueue();
-                }
-            }, this.flushInterval);
+    /**
+     * Force flush ngay lập tức (bỏ qua rate-limit).
+     * Dùng khi user gõ lệnh mới (write()) hoặc PTY onExit.
+     * Gọi fire-and-forget với .catch(() => {}).
+     */
+    async _forceFlush() {
+        if (this._flushGuard || this.isShuttingDown) return;
+
+        this._cancelFlushTimers();
+        this._flushGuard = true;
+        this._flushPending = false;
+
+        try {
+            await this.flushOutput();
+            this._lastFlushTime = Date.now();
+        } finally {
+            this._flushGuard = false;
+        }
+    }
+
+    _cancelFlushTimers() {
+        if (this._flushSettleTimer) {
+            clearTimeout(this._flushSettleTimer);
+            this._flushSettleTimer = null;
+        }
+        if (this._flushMaxTimer) {
+            clearTimeout(this._flushMaxTimer);
+            this._flushMaxTimer = null;
         }
     }
 
